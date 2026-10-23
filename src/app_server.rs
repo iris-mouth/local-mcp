@@ -171,9 +171,15 @@ impl AppServer {
         if let Err(error) = initialized {
             // The reader task also owns the server; dropping this local Arc is
             // insufficient to close stdin or reap a stalled initialization child.
-            server
+            let confirmed = server
                 .shutdown(Duration::from_millis(session.settings.shutdown_ms))
                 .await;
+            if !confirmed {
+                return Err(error.context(format!(
+                    "Backend exit was not confirmed during startup cleanup. Residue: {}",
+                    session.diagnostics_directory.display()
+                )));
+            }
             return Err(error);
         }
         Ok((server, rx))

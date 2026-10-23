@@ -76,21 +76,21 @@
     {
       "source_mib": 64,
       "peak_rss_kib_by_pid": {
-        "25784": 73312,
-        "25788": 67120
+        "28314": 73264,
+        "28318": 67296
       }
     },
     {
       "source_mib": 256,
       "peak_rss_kib_by_pid": {
-        "25784": 77424,
-        "25788": 69728
+        "28314": 77424,
+        "28318": 69776
       }
     }
   ],
-  "adapter_executable_sha256": "190b9e428c82c1a83f33c75ac04b0113ead5a1e48d7d7f437912ba26a47eaa23",
+  "adapter_executable_sha256": "aac73f21e39f1183e09c0fa7b6b727d230e9ab337edba835e3b53601ffd26460",
   "source_sha256": {
-    "src/app_server.rs": "b486e04ea6efec1dd1019e772c4b6b0e7b27a9e40669fd1dbd942979db899f79",
+    "src/app_server.rs": "5ea214ec6f7ba6f854ba9e185616d9d0a20b2013d7afe91f9853a0ea1892d043",
     "src/config.rs": "59b0541767a8159d3e9bf4e8aa13bf6d0cb62b8bd3fa9a7ba25521612409e9be",
     "src/files.rs": "bc535237cffc1f2cd098fd4fdbabfdb40588b90c8d77cd0388e99e9158e76ff5",
     "src/image_validation.rs": "015ee31ee9910248b9d829bc5496d32c65a6d0e7a5608df605e294b55c54ff2d",

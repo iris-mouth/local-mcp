@@ -111,7 +111,7 @@ def probe(mode):
             os.close(master)
 
 
-def probe_startup():
+def probe_startup(ignore_eof=False):
     # Stall after initialize is received. Ctrl-C must close and reap this
     # isolated child rather than waiting for the normal RPC timeout.
     with tempfile.TemporaryDirectory(prefix='local-mcp-startup-') as directory:
@@ -123,9 +123,12 @@ def probe_startup():
                            'if "generate-json-schema" in sys.argv:\n'
                            ' os.execv(fixture,[fixture]+sys.argv[1:])\n'
                            f'pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n'
-                           'for line in sys.stdin: pass\n')
+                           'for line in sys.stdin: pass\n'+
+                           ('import time; time.sleep(60)\n' if ignore_eof else ''))
         fixture.chmod(0o700)
-        owner = subprocess.Popen([str(BINARY), 'start', 'startup-'+str(uuid.uuid4()), '--codex', str(fixture)],
+        config = root/'settings.json'
+        config.write_text(json.dumps({'shutdown_ms': 100}))
+        owner = subprocess.Popen([str(BINARY), 'start', 'startup-'+str(uuid.uuid4()), '--codex', str(fixture), '--config', str(config)],
                                  stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.PIPE, cwd=root, start_new_session=True)
         backend_pid = None
@@ -139,13 +142,19 @@ def probe_startup():
             owner.wait(timeout=2)
             text = owner.stderr.read().decode()
             assert owner.returncode != 0 and 'startup interrupted' in text, text
+            warning = 'Backend exit was not confirmed during startup cleanup. Residue: '
+            assert (warning in text) == ignore_eof, text
+            if ignore_eof:
+                residue = next(line.split(warning, 1)[1] for line in text.splitlines() if warning in line)
+                assert pathlib.Path(residue).is_dir(), 'unconfirmed diagnostic residue was deleted'
             try:
                 os.kill(backend_pid, 0)
             except ProcessLookupError:
                 pass
             else:
                 raise AssertionError('initializing backend remains')
-            print('PASS interrupted initialization reaps backend in', round(time.monotonic()-started, 2), 'seconds', flush=True)
+            print('PASS interrupted initialization', 'EOF ignored' if ignore_eof else 'EOF accepted',
+                  'reaps backend in', round(time.monotonic()-started, 2), 'seconds', flush=True)
         finally:
             if owner.poll() is None:
                 os.killpg(owner.pid, signal.SIGTERM)
@@ -161,5 +170,6 @@ def probe_startup():
 
 if __name__ == '__main__':
     probe_startup()
+    probe_startup(ignore_eof=True)
     for mode in ('group', 'owner', 'eof', 'group-active'):
         probe(mode)
