@@ -82,6 +82,8 @@ release版の大出力試験で記録したピークRSS（KiB）:
 
 画像はnative MCP image配送まで成功したが、通常Chatは図柄を認識できず、視覚受入は未達。比較した旧get_imageでも同じfixtureを認識できなかったため、新実装固有の原因とは断定しない。詳細と切分け証拠は[通常Chat受入記録](chat-acceptance.md)に記す。
 
+後続の[画像診断](image-diagnosis.md)では旧get_imageのcontent_itemsを画像出力helperへ渡して盲検認識に成功した。しかし新view_imageの再試験では、通常ChatへstructuredContentと同じメタデータのみが公開され、content/content_itemsが無いため視覚受入は引き続き未達。新旧の結果を区別する。
+
 本人許可による共有plugin catalogの一時更新は旧10ツールへ復元し、新旧のテスト接続をすべて終了した。本番binary/profile/helperは不変で、既存GBrainの稼働を確認した。
 
 ## 未完了の受入・範囲

@@ -1,13 +1,15 @@
 # MCP画像のモデル視覚利用の切り分け
 
 Date: 2026-10-23 (Asia/Tokyo)
-Status: content_items image output and blind visual recognition passed in ordinary Chat; oracle verified
+Status: legacy content_items path passed; new view_image retest failed because ordinary Chat exposed structured metadata without image content; legacy catalog restored and all test connections stopped
 
 ## 結果
 
 受入記録は`38046ba`でコミットした。今回の直接添付対照試験では、前回MCP経由で認識できなかった同じPNGを、同じ通常Chatが正しく認識した。画像自体とそのChatの視覚機能の一般的な失敗では説明できない。新実装固有のregressionとも断定できない。
 
 新規通常Chatの構造検査では、返却オブジェクトが`{content: string, content_items: ...}`だった。Chatが想定した標準MCPの`content: ContentBlock[]`ではなく、画像出力の条件分岐に入っていなかった。この呼出しで画像がモデルへ出力されない直接の要因は返却構造の取り違え。後続試験で`content_items[0]`にnative imageが保持されていることと、image helperへ渡すことで通常Chatが5図形の視覚回答を生成できることを確認した。本人許可後の正解manifestとの事後照合で、5図形すべての色・形・相対位置が一致した。画像bytes自体の恒常的なTunnel欠落とは区別する。
+
+ただし、その後の新view_image再試験ではcontent_items自体が通常Chatへ公開されず、structuredContentと同じメタデータだけが見えた。旧版の返却構造の取り違えと、新版の画像ブロック非公開は分けて扱う。新実装の視覚受入は未達。
 
 ## 判定点と手順上の制約
 
@@ -156,3 +158,44 @@ image output = success
 本人の「正解manifestの読取と事後採点を許可する」後、親タスクだけでvision-probe2-expected.jsonを初めて読んだ。確定済みの通常Chat回答を照合し、総数5と、上表の5図形すべての色・形・相対位置が一致した。下中央〜右寄りという回答は、正解のbottom rightに配置した三角形の相対位置と一致する。正解を試験Chatへ送らず、照合後に追加回答を求めていない。
 
 旧get_image → 既存Tunnel → 通常Chatのcontent_items → 画像出力helper → 未見図形の認識、という経路の視覚受入は合格。以前の「画像未認識」は同じChat側でcontentを標準MCP配列として扱ったことによる画像出力漏れと切り分けられた。新view_imageの再試験や、全hostで同じ返却形式が保証されることは、この結果に含めない。
+
+## 新view_imageの再試験
+
+本人が必要な試験接続、共有定義の新9への一時更新と旧10への復元、画像取得、正解manifestの事後採点を明示許可した。新しい使い捨てfixtureを生成し、正解は読まず試験した。
+
+- Base: `/private/tmp/local-mcp-chat-acceptance-ex0him9d`
+- Session: `chat-uat-09bcc1db9d8b43e5`
+- Runtime: `afe65199-7e24-4585-9258-0245bdd08aa0`
+- Binary SHA-256: `068b83de3cf0c6faef324db436731402027451fe1a167d763015010654a101b6`（元のレビュー済みbinaryと同一）
+- Image: PNG 4347 bytes、SHA-256 `003885613db00338e7c25f5a819b1c5cfd5f715b77253bc77cd12b66816417a4`
+- Chat: 上記画像試験Chatを再読込して使用。fixtureは新規なので以前の回答は正解を含まない。
+
+旧10と新9のtools/list schemaおよび本番5ファイルのhashをこのbaseへsnapshotした。Keychain本人許可後に試験Tunnel readyz=200を確認し、管理UIの「ツールを更新」を実行。通常Chatが新9ツールを列挙し、session_infoでcwd/runtime/backend_available一致を実測した。
+
+Chatはview_imageを2回呼んだと報告した。2回目は返却構造に応じた出力方法の確認。今回の許可範囲内の画像取得であり、書込・正解manifest参照・コマンド実行・設定変更は行わせていない。
+
+通常Chatの返却構造検査:
+
+```text
+keys = [bytes, mime_type, ok, path, runtime_id, schema_version, session_id]
+ok = true
+mime_type = image/png
+typeof content = undefined
+content_items = absent
+typeof bytes = number
+image output = unsupported_bytes_shape（image helperへ渡せず）
+```
+
+通常Chatの図形数・位置・色・形はすべて未確認。従って新view_image視覚受入は未達で、正解採点に使える回答もない。正解manifestを読む必要はなく未読のまま保持した。
+
+同じ新ownerへ既存stdio wrapperから直接呼ぶローカル境界probeでは、content=[text,image]、structuredContentのkeysは上記Chatのkeysと同一。native imageをdecodeした4347 bytesはfixtureと完全一致した。証拠はbaseのview-image-wire-proof.json（型・サイズ・hashのみ）。通常ChatではstructuredContentが優先されて画像contentが非公開になる可能性を強く支持するが、内部処理層は観測できず、structuredContentだけを除いた比較も未実施なので因果を確定したとはしない。
+
+新view_imageのcontent_itemsからの画像出力は、当該itemが呼出し側へ公開されず実行不能だった。旧get_imageの成功を新実装へ読み替えない。修正・再配置は今回の検証依頼に含めず、ソースと本番ファイルは変更していない。
+
+新supervisor exec87307へstatusを送り当該owner/Tunnel存続を照合後、stopを送ってowner exit0。試験プロセス消失と診断領域local-mcp-runtime-bCUmge削除を確認した。旧10復元用に既存start-local.commandを同じprojectで起動（exec58225、session `0c9ba5e0-f6a7-4404-955e-8fc257580861`）。現在Keychain本人確認待ちで、共有catalogはまだ新9。ready確認後に旧10へ復元する。
+
+## 新view_image再試験後の復元完了
+
+本人のKeychain一度だけ許可後、旧復元用Tunnelのreadyz=200。管理UIの「ツールを更新」を実行し、通常Chatを再読込した。Chatは旧10ツールを実際に列挙し、get_imageあり・view_image/apply_diff/exec_command等なしを確認。復元用sessionのsession_infoを1回呼び、cwdが同じ使い捨てprojectと完全一致した。画像取得や実行操作はさせていない。管理画面の権限は引き続き「低リスクの操作を許可」。
+
+exec58225のsession_info履歴と、親PID63322が当該project用start-local.commandであることを確認後、Ctrl-Cでexit130。新旧の試験owner/Tunnel/facadeが消失し、既存GBrain Tunnel PID32053のみ残ることを確認した。GBrain readyz=200、本番5ファイルのhashはこの試験開始前snapshotと一致。新ownerの専用診断領域も不存在。共有catalogの一時更新と旧10への復元は完了し、未達の視覚受入を成功とは扱わず記録を確定する。
