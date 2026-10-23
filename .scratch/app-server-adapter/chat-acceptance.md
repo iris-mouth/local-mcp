@@ -3,6 +3,8 @@
 Date: 2026-10-23 (Asia/Tokyo)
 Status: completed with image visual acceptance unmet; legacy 10-tool catalog restored; all test connections stopped
 
+Follow-up: 画像失敗の原因を通常Chatの返却形式の取り違えへ切り分けた。旧get_imageの画像はcontent_items[0]に保持され、画像出力helperへ渡すと未見の5図形を認識でき、本人許可後の正解照合で全件一致した。旧画像経路の視覚受入は合格。新view_imageのcatalogへ戻した再試験は未実施。詳細は[画像診断記録](image-diagnosis.md)を参照。以下は元の受入時点の記録を保持する。
+
 ## 現時点の結果
 
 通常Chatで、新9ツールの公開、session/runtime照合、CRLF行範囲読取、差分と重複抑止、非ゼロ終了、pipe入力と重複抑止/EOF、停止ACKと実終了、限定拡張と権限非継続、固定上限/別session/旧runtime/依頼ID競合/symlink diff/Git context不一致の拒否を確認した。

@@ -1,13 +1,13 @@
 # MCP画像のモデル視覚利用の切り分け
 
 Date: 2026-10-23 (Asia/Tokyo)
-Status: diagnosis completed within authorized probes; ordinary Chat response-shape mismatch identified, content_items contents unverified
+Status: content_items image output and blind visual recognition passed in ordinary Chat; oracle verified
 
 ## 結果
 
 受入記録は`38046ba`でコミットした。今回の直接添付対照試験では、前回MCP経由で認識できなかった同じPNGを、同じ通常Chatが正しく認識した。画像自体とそのChatの視覚機能の一般的な失敗では説明できない。新実装固有のregressionとも断定できない。
 
-新規通常Chatの構造検査では、返却オブジェクトが`{content: string, content_items: ...}`だった。Chatが想定した標準MCPの`content: ContentBlock[]`ではなく、画像出力の条件分岐に入っていなかった。この呼出しで画像がモデルへ出力されない直接の要因は返却構造の取り違え。`content_items`の内容は未検査なので、そこに画像が保持されるか、Chat内部のどの変換層がこの形式を作るか、実際にそこから出力すれば視覚受入が成功するかは未確定。画像bytes自体の恒常的なTunnel欠落とは区別する。
+新規通常Chatの構造検査では、返却オブジェクトが`{content: string, content_items: ...}`だった。Chatが想定した標準MCPの`content: ContentBlock[]`ではなく、画像出力の条件分岐に入っていなかった。この呼出しで画像がモデルへ出力されない直接の要因は返却構造の取り違え。後続試験で`content_items[0]`にnative imageが保持されていることと、image helperへ渡すことで通常Chatが5図形の視覚回答を生成できることを確認した。本人許可後の正解manifestとの事後照合で、5図形すべての色・形・相対位置が一致した。画像bytes自体の恒常的なTunnel欠落とは区別する。
 
 ## 判定点と手順上の制約
 
@@ -119,3 +119,40 @@ image helper = 未実行（contentが配列という条件を満たさない）
 ## 終了
 
 終了のCtrl-Cは自動承認レビューがterminalの現状未確認として一度拒否。空pollで当該sessionの画像読取履歴を取得し、PID1226が使い捨てprojectに対するstart-local.commandであること、試験Tunnel/owner/facadeの親子関係を再確認した後、同じexec session92102へCtrl-Cを送りexit130を確認した。別プロセスのkillへ迂回していない。
+
+## content_itemsからの画像出力試験
+
+本人がcontent_itemsの内容確認・画像出力・通常Chatの視覚認識、および必要な試験接続と追加取得を許可した。既存起動scriptで同じ使い捨てprojectを再度起動し、本人のKeychain一度だけ許可後にreadyz=200。共有catalogは旧10のままで、sessionは`d3633116-4fae-4597-b60f-f564bedf7cf6`、exec session33528。
+
+同じ新規Chatでsession_infoのcwd一致を確認し、get_image(vision-probe2.png)を1回呼んだ。同じJavaScript実行内で返却構造を記録し、画像itemのmimeTypeとdataを画像出力ヘルパーimage()へ渡した。画像データの文字列は回答やファイルへ記録しなかった。Chatの環境には実行間storeが提供されていないとの報告だったが、取得と画像出力が同一実行内で完了したため追加取得は不要だった。
+
+```text
+top-level keys = [content, content_items]
+content = string, length 33
+content_items = array, length 1
+content_items[0].type = image
+content_items[0] keys = [type, mimeType, data]
+image output = success
+```
+
+通常Chatは画像を実際に見られたと報告し、以下を回答した（正解は提示していない）:
+
+| 位置 | 色 | 形 |
+|---|---|---|
+| 左上 | 黄色 | 正方形 |
+| 上中央 | 緑色 | 円 |
+| 右上 | 紫色 | 正方形 |
+| 左下寄り | 赤色 | 円 |
+| 下中央〜右寄り | オレンジ色 | 上向き三角形 |
+
+総数5個。これは単なるメタデータ取得とは異なる視覚回答である。ただし、親タスクでのhidden expected manifestの事後採点は自動承認レビューに拒否された。回答確定後に親タスクだけで読み、試験Chatへ正解を送らないことを明示して再審査したが、明示許可が別途必要として再度拒否された。別経路で正解を取得せず、本人へ読取と事後採点の許可を依頼した。
+
+今回の検証対象は旧get_imageと現在の通常Chatの返却形式。新view_imageの共有catalogへ切り替える再試験は実施していないため、新9ツールの視覚受入合格とは扱わない。サーバーがMCP準拠imageを返した後、Chatのtool adapterがcontent_itemsへ配置した画像を、呼出し側がimageとして明示出力する必要があることを今回の経路で確認した。どの内部層がcontent_itemsへ変換するかは未特定。
+
+試験接続の親PID23261が当該project用start-local.commandであることを照合し、exec33528のread session/image履歴を確認後、Ctrl-Cでexit130。試験owner/Tunnel/facadeが消失し、既存GBrain Tunnel PID32053のみ残ることを確認。GBrain readyz=200、本番5ファイルは初期hashと一致。共有catalog・権限・認証・providerは変更していない。
+
+## 正解照合と最終判定
+
+本人の「正解manifestの読取と事後採点を許可する」後、親タスクだけでvision-probe2-expected.jsonを初めて読んだ。確定済みの通常Chat回答を照合し、総数5と、上表の5図形すべての色・形・相対位置が一致した。下中央〜右寄りという回答は、正解のbottom rightに配置した三角形の相対位置と一致する。正解を試験Chatへ送らず、照合後に追加回答を求めていない。
+
+旧get_image → 既存Tunnel → 通常Chatのcontent_items → 画像出力helper → 未見図形の認識、という経路の視覚受入は合格。以前の「画像未認識」は同じChat側でcontentを標準MCP配列として扱ったことによる画像出力漏れと切り分けられた。新view_imageの再試験や、全hostで同じ返却形式が保証されることは、この結果に含めない。
