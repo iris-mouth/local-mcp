@@ -47,6 +47,13 @@ impl AppServer {
         executable: &Path,
         session: &Session,
     ) -> Result<(Arc<Self>, mpsc::Receiver<Event>)> {
+        Self::spawn_interruptible(executable, session, std::future::pending()).await
+    }
+    pub async fn spawn_interruptible(
+        executable: &Path,
+        session: &Session,
+        interrupted: impl std::future::Future<Output = ()>,
+    ) -> Result<(Arc<Self>, mpsc::Receiver<Event>)> {
         let mut command = Command::new(executable);
         // Terminal Ctrl-C belongs to the owner. Keep the backend alive while
         // managed jobs are stopped and the original stdio is closed normally.
@@ -153,11 +160,22 @@ impl AppServer {
             }
             let _ = tx.send(Event::Lost).await;
         });
-        server.control("initialize", json!({"clientInfo":{"name":"local_mcp","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})).await
-            .map_err(|e|anyhow::anyhow!("App Server initialization failed: {}",e.code))?;
-        server
-            .send(json!({"method":"initialized","params":{}}))
-            .await?;
+        let initialized = tokio::select! {
+            _ = interrupted => Err(anyhow::anyhow!("App Server startup interrupted")),
+            result = async {
+                server.control("initialize", json!({"clientInfo":{"name":"local_mcp","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})).await
+                    .map_err(|e|anyhow::anyhow!("App Server initialization failed: {}",e.code))?;
+                server.send(json!({"method":"initialized","params":{}})).await
+            } => result,
+        };
+        if let Err(error) = initialized {
+            // The reader task also owns the server; dropping this local Arc is
+            // insufficient to close stdin or reap a stalled initialization child.
+            server
+                .shutdown(Duration::from_millis(session.settings.shutdown_ms))
+                .await;
+            return Err(error);
+        }
         Ok((server, rx))
     }
     pub fn alive(&self) -> bool {

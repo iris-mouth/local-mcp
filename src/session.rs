@@ -143,8 +143,6 @@ fn bind(id: &str) -> Result<(tokio::net::UnixListener, SocketGuard)> {
 #[cfg(unix)]
 pub async fn start(id: Option<String>, settings: Settings, codex: PathBuf) -> Result<()> {
     settings.validate()?;
-    // Register before announcing readiness so an immediate Ctrl-C is handled too.
-    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     config::validate_session_id(&id)?;
     let (listener, _socket) = bind(&id)?;
@@ -173,7 +171,13 @@ pub async fn start(id: Option<String>, settings: Settings, codex: PathBuf) -> Re
         );
         return Err(error);
     }
-    let (backend, events) = AppServer::spawn(&codex, &session).await?;
+    // Schema checking retains default terminal signal handling. Once the backend
+    // is isolated, handle interrupts even while its initialization is pending.
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    let (backend, events) = AppServer::spawn_interruptible(&codex, &session, async {
+        interrupt.recv().await;
+    })
+    .await?;
     let jobs = Jobs::new(session, backend, events);
     eprintln!("Session ready: {}", jobs.session.id);
     let readers = Arc::new(tokio::sync::Semaphore::new(

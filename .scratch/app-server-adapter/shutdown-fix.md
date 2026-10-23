@@ -14,7 +14,7 @@
 ## 修正
 
 - `start`の入力待ちを専用の標準スレッドと有限のchannelへ移し、未完了の端末入力がruntime終了を妨げないようにした。EOFと`/status`の既存動作は維持する。
-- SIGINT受信を起動時に登録し、ready直後のCtrl-Cにも対応する。
+- SIGINT受信をschema検査後・App Server起動前に登録し、初期化待ちとready直後のCtrl-Cにも対応する。初期化中断・失敗時も元stdioを閉じて子の終了を有界に待つ。
 - 元App Serverを別プロセスグループへ置き、端末Ctrl-Cを所有セッションが受ける。既存のジョブ停止、元stdioのclose、子のwaitという終了順序を維持し、警告条件や診断領域の削除条件を緩めない。
 - `tests/shutdown.py`に開いたPTYでのグループSIGINT、単独SIGINT、EOF、実行中ジョブありのグループSIGINTを保存。ready直後に信号を送り、終了コード・警告・所有PID消滅・IPC/lock削除・診断領域削除を検査する。
 
@@ -30,3 +30,13 @@
 - 本番の`profiles/local-workspace.yaml`、`run-tunnel.py`、`local-mcp-stdio.py`、`profiles/gbrain-memory.yaml`のSHA256は切替前記録と一致。認証・Keychain・GBrainは変更していない。
 
 本番配置や共有ツール定義はこの修正作業では更新していない。以前の異常終了で残った診断領域を推測で削除していない。
+
+## Astra初回レビューと追補
+
+`95354d7`の仕様軸は指摘なし。実装基準軸で、SIGINTを起動の最初に登録しながら受信をready後までpollしないため、初期化待ち中のCtrl-Cが遅れるP2指摘を受けた。
+
+schema検査中は従来の端末信号動作を維持し、その後に受信を登録する。初期化とSIGINTを同時に待ち、中断時には分離したApp Serverのstdioを閉じ、子を回収してからエラーを返すよう修正した。初期化失敗時も同じ回収経路を使う。
+
+遅延初期化fixtureを追加。`95354d7`を一時領域から再ビルドしたバイナリは2秒の中断期限で失敗し、追補版では即時中断・子PID消滅を確認した。元の4終了経路と合わせてfixture/公式CLIの各5経路が成功した。
+
+追補後にfmt、clippy、17テスト、公式App Server受入66項目を再実行して成功。[最終実機結果](shutdown-real-results.json)に最終ソース・バイナリのSHA256を保存した。

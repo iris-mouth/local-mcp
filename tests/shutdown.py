@@ -111,6 +111,55 @@ def probe(mode):
             os.close(master)
 
 
+def probe_startup():
+    # Stall after initialize is received. Ctrl-C must close and reap this
+    # isolated child rather than waiting for the normal RPC timeout.
+    with tempfile.TemporaryDirectory(prefix='local-mcp-startup-') as directory:
+        root = pathlib.Path(directory)
+        pid_file = root/'backend.pid'
+        fixture = root/'delayed.py'
+        fixture.write_text('#!/usr/bin/python3\nimport os,sys,pathlib\n'
+                           f'fixture={str(REPO/"tests/fixtures/app_server.py")!r}\n'
+                           'if "generate-json-schema" in sys.argv:\n'
+                           ' os.execv(fixture,[fixture]+sys.argv[1:])\n'
+                           f'pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n'
+                           'for line in sys.stdin: pass\n')
+        fixture.chmod(0o700)
+        owner = subprocess.Popen([str(BINARY), 'start', 'startup-'+str(uuid.uuid4()), '--codex', str(fixture)],
+                                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.PIPE, cwd=root, start_new_session=True)
+        backend_pid = None
+        try:
+            deadline = time.monotonic()+5
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+            backend_pid = int(pid_file.read_text())
+            started = time.monotonic()
+            os.killpg(owner.pid, signal.SIGINT)
+            owner.wait(timeout=2)
+            text = owner.stderr.read().decode()
+            assert owner.returncode != 0 and 'startup interrupted' in text, text
+            try:
+                os.kill(backend_pid, 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise AssertionError('initializing backend remains')
+            print('PASS interrupted initialization reaps backend in', round(time.monotonic()-started, 2), 'seconds', flush=True)
+        finally:
+            if owner.poll() is None:
+                os.killpg(owner.pid, signal.SIGTERM)
+                owner.wait(timeout=5)
+            if backend_pid:
+                try:
+                    os.kill(backend_pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            owner.stdin.close()
+            owner.stderr.close()
+
+
 if __name__ == '__main__':
+    probe_startup()
     for mode in ('group', 'owner', 'eof', 'group-active'):
         probe(mode)
