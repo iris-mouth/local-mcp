@@ -1,136 +1,227 @@
-use std::path::{Path, PathBuf};
-
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
-#[derive(Clone, Serialize, Deserialize)]
+/// Only the human-controlled startup file can set these ceilings.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Settings {
+    pub max_jobs: usize,
+    pub max_receipts: usize,
+    pub output_bytes_per_job: usize,
+    pub output_bytes_total: usize,
+    pub output_page_bytes: usize,
+    pub output_ttl_secs: u64,
+    pub max_message_bytes: usize,
+    pub max_input_bytes: usize,
+    pub max_diff_bytes: usize,
+    pub max_image_pixels: usize,
+    pub max_rpc_inflight: usize,
+    pub rpc_timeout_ms: u64,
+    pub shutdown_ms: u64,
+    pub write_roots: Vec<PathBuf>,
+    pub extra_roots: Vec<PathBuf>,
+    pub allow_network: bool,
+    pub allow_full_access: bool,
+    pub allow_git_metadata: bool,
+    pub allow_ssh_agent: bool,
+}
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            max_jobs: 4,
+            max_receipts: 8192,
+            output_bytes_per_job: 4 * 1024 * 1024,
+            output_bytes_total: 16 * 1024 * 1024,
+            output_page_bytes: 256 * 1024,
+            output_ttl_secs: 3600,
+            max_message_bytes: 16 * 1024 * 1024,
+            max_input_bytes: 256 * 1024,
+            max_diff_bytes: 1024 * 1024,
+            max_image_pixels: 32 * 1024 * 1024,
+            max_rpc_inflight: 64,
+            rpc_timeout_ms: 10000,
+            shutdown_ms: 5000,
+            write_roots: vec![],
+            extra_roots: vec![],
+            allow_network: false,
+            allow_full_access: false,
+            allow_git_metadata: false,
+            allow_ssh_agent: false,
+        }
+    }
+}
+impl Settings {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.max_jobs > 0 && self.max_receipts > 0,
+            "job/receipt limits must be positive"
+        );
+        ensure!(
+            self.output_bytes_per_job > 0 && self.output_bytes_total >= self.output_bytes_per_job,
+            "invalid output budget"
+        );
+        ensure!(
+            self.output_page_bytes > 0 && self.output_page_bytes <= self.output_bytes_per_job,
+            "invalid output page"
+        );
+        ensure!(
+            self.max_message_bytes >= 65536 && self.max_message_bytes <= 64 * 1024 * 1024,
+            "message budget must be 64 KiB..64 MiB"
+        );
+        ensure!(
+            self.output_page_bytes <= self.max_message_bytes / 16
+                && self.max_diff_bytes <= self.max_message_bytes / 8
+                && self.max_input_bytes <= self.max_message_bytes / 8,
+            "payload budgets exceed transport budget"
+        );
+        ensure!(
+            self.max_rpc_inflight > 0
+                && self.rpc_timeout_ms > 0
+                && self.shutdown_ms > 0
+                && self.output_ttl_secs > 0,
+            "timeouts and RPC capacity must be positive"
+        );
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Serialize)]
 pub struct Session {
     pub id: String,
+    pub runtime_id: String,
     pub cwd: PathBuf,
-    #[serde(default)]
-    pub permitted_directories: Vec<PathBuf>,
+    pub roots: Vec<PathBuf>,
+    pub git_metadata_candidates: Vec<PathBuf>,
+    pub extra_roots: Vec<PathBuf>,
+    pub temporary_directory: PathBuf,
+    pub diagnostics_directory: PathBuf,
+    pub settings: Settings,
+    #[serde(skip)]
+    pub environment: BTreeMap<String, String>,
 }
-
-pub fn state_dir() -> Result<PathBuf> {
-    dirs::state_dir()
-        .or_else(dirs::data_local_dir)
-        .map(|path| path.join("local-mcp"))
-        .context("could not determine a local state directory")
+impl Session {
+    pub fn new(id: String, cwd: PathBuf, directory: &Path, mut settings: Settings) -> Result<Self> {
+        validate_session_id(&id)?;
+        settings.validate()?;
+        let cwd = canonical_directory(&cwd)?;
+        let directory = canonical_directory(directory)?;
+        let mut roots = vec![cwd.clone()];
+        for p in &settings.write_roots {
+            roots.push(canonical_directory(p)?);
+        }
+        let mut candidates = vec![];
+        // Resolve linked worktree metadata using Git, never by trusting model env.
+        for arg in ["--absolute-git-dir", "--git-common-dir"] {
+            if let Ok(output) = std::process::Command::new("git")
+                .args(["rev-parse", arg])
+                .current_dir(&cwd)
+                .env_clear()
+                .envs(safe_environment())
+                .output()
+                && output.status.success()
+            {
+                let path = cwd.join(String::from_utf8(output.stdout)?.trim());
+                let path = canonical_directory(&path)?;
+                candidates.push(path.clone());
+                if settings.allow_git_metadata {
+                    roots.push(path);
+                }
+            }
+        }
+        candidates.sort();
+        candidates.dedup();
+        let temporary_directory = directory.join("tmp");
+        let diagnostics_directory = directory.join("codex");
+        std::fs::create_dir_all(&temporary_directory)?;
+        std::fs::create_dir_all(&diagnostics_directory)?;
+        roots.push(temporary_directory.clone());
+        roots.sort();
+        roots.dedup();
+        let mut extra_roots = vec![];
+        for p in &settings.extra_roots {
+            extra_roots.push(canonical_directory(p)?);
+        }
+        extra_roots.sort();
+        extra_roots.dedup();
+        settings.write_roots = roots.clone();
+        settings.extra_roots = extra_roots.clone();
+        let mut environment = safe_environment();
+        environment.insert(
+            "TMPDIR".into(),
+            temporary_directory.to_string_lossy().into_owned(),
+        );
+        if settings.allow_ssh_agent
+            && let Some(socket) = std::env::var_os("SSH_AUTH_SOCK")
+        {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::{FileTypeExt, MetadataExt};
+                let metadata = std::fs::metadata(&socket)?;
+                ensure!(
+                    metadata.file_type().is_socket()
+                        && metadata.uid() == unsafe { libc::geteuid() },
+                    "SSH agent must be a same-user socket"
+                );
+            }
+            environment.insert(
+                "SSH_AUTH_SOCK".into(),
+                socket.to_string_lossy().into_owned(),
+            );
+        }
+        Ok(Self {
+            id,
+            runtime_id: uuid::Uuid::new_v4().to_string(),
+            cwd,
+            roots,
+            git_metadata_candidates: candidates,
+            extra_roots,
+            temporary_directory,
+            diagnostics_directory,
+            settings,
+            environment,
+        })
+    }
 }
-
-pub fn session_path(id: &str) -> Result<PathBuf> {
-    validate_session_id(id)?;
-    Ok(state_dir()?.join("sessions").join(format!("{id}.json")))
+pub fn safe_environment() -> BTreeMap<String, String> {
+    ["HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ"]
+        .into_iter()
+        .filter_map(|key| std::env::var(key).ok().map(|v| (key.into(), v)))
+        .collect()
 }
-
+pub fn validate_session_id(id: &str) -> Result<()> {
+    ensure!(
+        !id.is_empty()
+            && id.len() <= 64
+            && id != "."
+            && id != ".."
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)),
+        "invalid session_id"
+    );
+    Ok(())
+}
+pub fn canonical_directory(path: &Path) -> Result<PathBuf> {
+    let p = std::fs::canonicalize(path)
+        .with_context(|| format!("cannot resolve {}", path.display()))?;
+    ensure!(p.is_dir(), "not a directory");
+    Ok(p)
+}
 pub fn socket_path(id: &str) -> Result<PathBuf> {
     validate_session_id(id)?;
-    Ok(socket_path_for_id(id))
-}
-
-/// Returns a short, per-user directory for Unix-domain session sockets.
-///
-/// Socket paths have a platform-specific length limit (104 bytes on macOS),
-/// so they cannot live below the regular state directory, which may include
-/// a long home-directory path. Session metadata remains in `state_dir()`.
-#[cfg(unix)]
-fn socket_dir() -> PathBuf {
-    // `TMPDIR` on macOS can itself be long, so use the conventional short
-    // system temporary directory rather than `std::env::temp_dir()`.
-    let uid = unsafe { libc::geteuid() };
-    PathBuf::from("/tmp").join(format!("local-mcp-{uid}"))
-}
-
-#[cfg(unix)]
-fn socket_path_for_id(id: &str) -> PathBuf {
-    socket_dir().join(format!("{id}.sock"))
-}
-
-#[cfg(windows)]
-fn socket_path_for_id(id: &str) -> PathBuf {
-    PathBuf::from(format!(r"\\.\pipe\local-mcp-{id}"))
-}
-
-pub async fn create_session(cwd: &Path, id: Option<&str>) -> Result<Session> {
-    let cwd = canonical_directory(cwd)?;
-    let id = id
-        .map(str::to_owned)
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-    validate_session_id(&id)?;
-    let session = Session {
-        id,
-        cwd: cwd.clone(),
-        permitted_directories: vec![cwd],
-    };
-    save_session(&session).await?;
-    Ok(session)
-}
-
-pub async fn load_session(id: &str) -> Result<Session> {
-    let path = session_path(id)?;
-    let bytes = tokio::fs::read(&path)
-        .await
-        .with_context(|| format!("session {id} was not found; run `local-mcp start` first"))?;
-    serde_json::from_slice(&bytes).context("invalid local-mcp session")
-}
-
-pub async fn save_session(session: &Session) -> Result<()> {
-    let path = session_path(&session.id)?;
-    tokio::fs::create_dir_all(path.parent().unwrap()).await?;
-    let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
-    tokio::fs::write(&temporary, serde_json::to_vec_pretty(session)?).await?;
-    tokio::fs::rename(temporary, path).await?;
-    Ok(())
-}
-
-pub fn validate_session_id(id: &str) -> Result<()> {
-    anyhow::ensure!(!id.is_empty(), "session ID must not be empty");
-    anyhow::ensure!(id.len() <= 64, "session ID must be at most 64 bytes");
-    anyhow::ensure!(
-        id.chars()
-            .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character)),
-        "session ID may contain only ASCII letters, numbers, '-', '_', and '.'"
-    );
-    anyhow::ensure!(id != "." && id != "..", "invalid session ID");
-    Ok(())
-}
-
-pub fn canonical_directory(path: &Path) -> Result<PathBuf> {
-    let path = std::fs::canonicalize(path)
-        .with_context(|| format!("cannot resolve {}", path.display()))?;
-    anyhow::ensure!(path.is_dir(), "{} is not a directory", path.display());
-    Ok(path)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validates_custom_session_ids() {
-        assert!(validate_session_id("my-project_1.dev").is_ok());
-        assert!(validate_session_id("").is_err());
-        assert!(validate_session_id("../escape").is_err());
-        assert!(validate_session_id("contains spaces").is_err());
-        assert!(validate_session_id(&"x".repeat(65)).is_err());
-    }
-
     #[cfg(unix)]
-    #[test]
-    fn puts_sockets_in_a_short_per_user_directory() {
-        let path = socket_path("7418eda5-fd07-4e00-ace5-c1ece2f68a02").unwrap();
-        assert_eq!(path.parent(), Some(socket_dir().as_path()));
-        assert!(path.as_os_str().len() < 104);
+    {
+        Ok(socket_directory().join(format!("{id}.sock")))
     }
-
-    #[cfg(windows)]
-    #[test]
-    fn uses_a_named_pipe_for_session_ipc() {
-        let path = socket_path("7418eda5-fd07-4e00-ace5-c1ece2f68a02").unwrap();
-        assert_eq!(
-            path,
-            PathBuf::from(r"\\.\pipe\local-mcp-7418eda5-fd07-4e00-ace5-c1ece2f68a02")
-        );
+    #[cfg(not(unix))]
+    {
+        anyhow::bail!("this adapter currently requires macOS or Unix")
     }
+}
+#[cfg(unix)]
+pub fn socket_directory() -> PathBuf {
+    PathBuf::from("/tmp").join(format!("local-mcp-{}", unsafe { libc::geteuid() }))
 }

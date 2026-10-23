@@ -26,13 +26,10 @@
             version = "0.1.0";
             src = self;
 
-            cargoHash = "sha256-oOZrW9kqHT/R/fO+EFfBWOGhA9Y2dznRPQHBc5HivIg=";
+            cargoLock.lockFile = ./Cargo.lock;
 
             nativeBuildInputs = with pkgs; [
-              cmake
               makeWrapper
-              perl
-              pkg-config
             ];
 
             postInstall = ''
@@ -41,7 +38,7 @@
                   pkgs.lib.makeBinPath (
                     [
                       pkgs.bash
-                      pkgs.curl
+                      pkgs.git
                     ]
                     ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.bubblewrap ]
                   )
@@ -49,7 +46,7 @@
             '';
 
             meta = {
-              description = "Sandboxed local-machine MCP server with out-of-band approvals";
+              description = "Session-owned MCP adapter for Codex App Server";
               homepage = "https://github.com/openai/codex";
               license = pkgs.lib.licenses.asl20;
               mainProgram = "local-mcp";
@@ -76,11 +73,7 @@
           default = pkgs.mkShell {
             packages = with pkgs; [
               cargo
-              cmake
-              curl
-              openssl
-              perl
-              pkg-config
+              git
               rustc
               rustfmt
             ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.bubblewrap ];

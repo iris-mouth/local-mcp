@@ -1,10 +1,7 @@
-mod approvals;
-mod config;
-mod mcp;
-mod sandbox;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use local_mcp::{config::Settings, mcp, session};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -15,20 +12,39 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Start a session in the current directory and show its permission UI.
+    /// Own one session and its App Server until Ctrl-C or stdin closes.
     Start {
         /// Session ID to use instead of generating a UUID.
         session_id: Option<String>,
+        /// Trusted startup settings (JSON), never read from MCP arguments.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Official Codex CLI executable; command/exec does not call a model.
+        #[arg(long, default_value = "codex")]
+        codex: PathBuf,
     },
-    /// Run the session-independent MCP server over stdin/stdout.
+    /// Serve MCP over stdio; execution stays owned by `start`.
     Mcp,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Start { session_id: None }) {
-        Command::Start { session_id } => approvals::start(session_id.as_deref()).await,
+    match Cli::parse().command.unwrap_or(Command::Start {
+        session_id: None,
+        config: None,
+        codex: PathBuf::from("codex"),
+    }) {
+        Command::Start {
+            session_id,
+            config,
+            codex,
+        } => {
+            let settings = match config {
+                Some(path) => serde_json::from_slice(&std::fs::read(path)?)?,
+                None => Settings::default(),
+            };
+            session::start(session_id, settings, codex).await
+        }
         Command::Mcp => mcp::serve().await,
     }
 }
