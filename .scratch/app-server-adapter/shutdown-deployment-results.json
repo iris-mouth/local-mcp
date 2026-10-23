@@ -1,0 +1,82 @@
+{
+  "source_commit": "82a20e1db5475262bbc05640b627c19af68db0fd",
+  "backup": "/Users/mitsuhiro/.local/share/chatgpt-mcp/backups/local-mcp-shutdown-fix-20261023-222941",
+  "old_binary_sha256": "ba3e3fe9363604418574f0d5b5e953fa19c032ef1b70eee3dc23ba5672d2852a",
+  "new_binary_sha256": "aac73f21e39f1183e09c0fa7b6b727d230e9ab337edba835e3b53601ffd26460",
+  "protected_hashes": {
+    "start-local.command": "e4c9cef845cc4991452e2e40b4d476f9b4d2b37be301de8527669d53bf4aeba0",
+    "profiles/local-workspace.yaml": "6ca872d106af5e84884ed84008ae9d50ac1e09584b1360a2d60f2381e27213bb",
+    "run-tunnel.py": "b57ddb8800ebadb577abc58d0a25af6cdd4a31a7b138642f4afb4414731187f2",
+    "local-mcp-stdio.py": "aa2cb06549ba82d85f98260e93887dee4ea415356202b50848c2083feeb42f70",
+    "profiles/gbrain-memory.yaml": "76c6cd0bb4a1bf39f107ffe30b498ed33e11c8d1cad994953a7eef3ff67a7b1a"
+  },
+  "deployment_date_jst": "2026-10-23",
+  "backup_timestamp_jst": "2026-10-23T22:29:41+09:00",
+  "installed_path": "/Users/mitsuhiro/.local/share/chatgpt-mcp/bin/local-mcp",
+  "deployment_method": "copy old executable to backup, preserve executable mode, atomically replace installed executable",
+  "post_deployment_command": "LOCAL_MCP_TEST_BINARY=/Users/mitsuhiro/.local/share/chatgpt-mcp/bin/local-mcp python3 tests/shutdown.py /Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+  "post_deployment_test_exit_code": 0,
+  "post_deployment_checks": [
+    {
+      "case": "initialization interrupted; EOF accepted",
+      "result": "passed",
+      "elapsed_seconds": 0.0,
+      "backend_reaped": true
+    },
+    {
+      "case": "initialization interrupted; EOF ignored",
+      "result": "passed",
+      "elapsed_seconds": 0.13,
+      "backend_reaped": true,
+      "unconfirmed_exit_warning": true,
+      "diagnostics_retained": true
+    },
+    {
+      "case": "terminal process-group SIGINT",
+      "result": "passed",
+      "elapsed_seconds": 0.01,
+      "exit_code": 0,
+      "warning": false,
+      "owner_backend_absent": true,
+      "owned_diagnostics_and_ipc_removed": true
+    },
+    {
+      "case": "owner-only SIGINT",
+      "result": "passed",
+      "elapsed_seconds": 0.01,
+      "exit_code": 0,
+      "warning": false,
+      "owner_backend_absent": true,
+      "owned_diagnostics_and_ipc_removed": true
+    },
+    {
+      "case": "stdin EOF",
+      "result": "passed",
+      "elapsed_seconds": 0.01,
+      "exit_code": 0,
+      "warning": false,
+      "owner_backend_absent": true,
+      "owned_diagnostics_and_ipc_removed": true
+    },
+    {
+      "case": "terminal SIGINT with active sleep job",
+      "result": "passed",
+      "elapsed_seconds": 0.01,
+      "exit_code": 0,
+      "warning": false,
+      "owner_backend_and_job_absent": true,
+      "owned_diagnostics_and_ipc_removed": true
+    }
+  ],
+  "post_deployment_gbrain_readyz_http_status": 200,
+  "protected_files_unchanged_after_deployment": true,
+  "shared_tool_catalog": "new9 unchanged",
+  "authentication_changes": false,
+  "gbrain_configuration_changes": false,
+  "recording_time_recheck": {
+    "installed_sha256_matches": true,
+    "backup_sha256_matches": true,
+    "protected_sha256_matches": true
+  },
+  "evidence": "Deployment metadata plus execution results from the production-deployment turn in this conversation; recording-time hashes rechecked without rerunning shutdown tests. Delayed-initialization cases use the dedicated fixture; the four ready-state shutdown cases use the official CLI."
+}
