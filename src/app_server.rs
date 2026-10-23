@@ -48,6 +48,10 @@ impl AppServer {
         session: &Session,
     ) -> Result<(Arc<Self>, mpsc::Receiver<Event>)> {
         let mut command = Command::new(executable);
+        // Terminal Ctrl-C belongs to the owner. Keep the backend alive while
+        // managed jobs are stopped and the original stdio is closed normally.
+        #[cfg(unix)]
+        command.process_group(0);
         command
             .arg("app-server")
             .args(["--listen", "stdio://"])

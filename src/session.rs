@@ -10,7 +10,7 @@ use rmcp::model::CallToolResult;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::{path::PathBuf, sync::Arc, time::Duration};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 
 fn parse<T: DeserializeOwned>(args: Value) -> Result<T> {
     Ok(serde_json::from_value(args)?)
@@ -143,6 +143,8 @@ fn bind(id: &str) -> Result<(tokio::net::UnixListener, SocketGuard)> {
 #[cfg(unix)]
 pub async fn start(id: Option<String>, settings: Settings, codex: PathBuf) -> Result<()> {
     settings.validate()?;
+    // Register before announcing readiness so an immediate Ctrl-C is handled too.
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     config::validate_session_id(&id)?;
     let (listener, _socket) = bind(&id)?;
@@ -178,15 +180,26 @@ pub async fn start(id: Option<String>, settings: Settings, codex: PathBuf) -> Re
         jobs.session.settings.max_rpc_inflight,
     ));
     let requests = RpcCapacity::new(jobs.session.settings.max_rpc_inflight);
-    let mut stdin = BufReader::new(tokio::io::stdin()).lines();
+    // Tokio stdin uses a blocking runtime task that cannot be cancelled. An open
+    // terminal would keep runtime shutdown waiting even after the owner returned.
+    // A dedicated thread may remain blocked until process exit without pinning it.
+    let (input, mut stdin) = tokio::sync::mpsc::channel(8);
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        for line in std::io::stdin().lock().lines() {
+            if input.blocking_send(line).is_err() {
+                break;
+            }
+        }
+    });
     let result: Result<()> = loop {
         tokio::select! {
-            signal=tokio::signal::ctrl_c()=>{break signal.context("cannot handle Ctrl-C");}
-            line=stdin.next_line()=>{match line {
-                Ok(None)=>break Ok(()),
-                Ok(Some(line)) if line.trim()=="/status"=>eprintln!("{}",jobs.info().structured_content.unwrap()),
-                Ok(Some(_))=>eprintln!("Use startup --config for trusted permission ceilings. /status or Ctrl-C."),
-                Err(e)=>break Err(e.into())
+            _=interrupt.recv()=>{break Ok(());}
+            line=stdin.recv()=>{match line {
+                None=>break Ok(()),
+                Some(Ok(line)) if line.trim()=="/status"=>eprintln!("{}",jobs.info().structured_content.unwrap()),
+                Some(Ok(_))=>eprintln!("Use startup --config for trusted permission ceilings. /status or Ctrl-C."),
+                Some(Err(e))=>break Err(e.into())
             }}
             connection=async {
                 let permit=readers.clone().acquire_owned().await.expect("IPC reader capacity closed");
