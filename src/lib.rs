@@ -5,4 +5,5 @@ mod image_validation;
 pub mod jobs;
 pub mod mcp;
 pub mod protocol;
+mod rpc_capacity;
 pub mod session;

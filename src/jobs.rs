@@ -69,6 +69,7 @@ struct Job {
     state: State,
     exit_code: Option<i64>,
     error: Option<&'static str>,
+    output_error: Option<&'static str>,
     input: InputMode,
     input_closed: bool,
     input_unknown: bool,
@@ -217,18 +218,18 @@ impl Jobs {
                 let id = store.process_jobs.get(process).cloned()?;
                 let job = store.jobs.get_mut(&id)?;
                 let Some(encoded) = params["deltaBase64"].as_str() else {
-                    job.error = Some("invalid_backend_output");
+                    job.output_error = Some("invalid_backend_output");
                     return None;
                 };
                 let Ok(bytes) = STANDARD.decode(encoded) else {
-                    job.error = Some("invalid_backend_output");
+                    job.output_error = Some("invalid_backend_output");
                     return None;
                 };
                 let stream = match params["stream"].as_str() {
                     Some("stdout") => &mut job.stdout,
                     Some("stderr") => &mut job.stderr,
                     _ => {
-                        job.error = Some("invalid_backend_output");
+                        job.output_error = Some("invalid_backend_output");
                         return None;
                     }
                 };
@@ -255,7 +256,7 @@ impl Jobs {
                         if !result["stdout"].as_str().unwrap_or("").is_empty()
                             || !result["stderr"].as_str().unwrap_or("").is_empty()
                         {
-                            job.error = Some("incompatible_streaming_result");
+                            job.output_error = Some("incompatible_streaming_result");
                         }
                         if code == 0
                             && let Some(params) = job.diff_apply.take()
@@ -559,6 +560,7 @@ impl Jobs {
                 state: State::Accepted,
                 exit_code: None,
                 error: None,
+                output_error: None,
                 input,
                 input_closed: input == InputMode::Closed,
                 input_unknown: false,
@@ -700,10 +702,10 @@ impl Jobs {
                     let receipt = args.request_id.as_ref().and_then(|r| store.receipts.get(r));
                     Some(success(
                         json!({"session_id":self.session.id,"runtime_id":self.session.runtime_id,"job_id":id,
-                        "request_id":args.request_id,"state":job.state,"exit_code":job.exit_code,"error":job.error,
+                        "request_id":args.request_id,"state":job.state,"exit_code":job.exit_code,"error":job.error.or(job.output_error),
                         "stdout":stdout,"stderr":stderr,"next_cursor":next,"input_delivery_unknown":job.input_unknown,
                         "input_closed":job.input_closed,"pty_multiplexed":job.input==InputMode::Pty,
-                        "output_unavailable":matches!(job.error,Some("invalid_backend_output"|"incompatible_streaming_result")),
+                        "output_unavailable":job.output_error.is_some(),"output_error":job.output_error,
                         "stop_ack":job.stop_ack,"effective_access":job.effective_access,
                         "input_receipt":receipt.filter(|r|r.input).and_then(|r|r.input_result.clone())}),
                     ))

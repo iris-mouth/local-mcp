@@ -1,16 +1,16 @@
-use crate::{protocol::ToolCall, session};
+use crate::{protocol::ToolCall, rpc_capacity::RpcCapacity, session};
 use anyhow::Result;
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext};
 use serde_json::{Value, json};
 
 #[derive(Clone)]
 pub struct Mcp {
-    requests: std::sync::Arc<tokio::sync::Semaphore>,
+    requests: RpcCapacity,
 }
 impl Default for Mcp {
     fn default() -> Self {
         Self {
-            requests: std::sync::Arc::new(tokio::sync::Semaphore::new(64)),
+            requests: RpcCapacity::new(64),
         }
     }
 }
@@ -37,14 +37,14 @@ impl ServerHandler for Mcp {
         request: CallToolRequestParams,
         _: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResponse, ErrorData> {
-        let Ok(_permit) = self.requests.clone().try_acquire_owned() else {
-            return Ok(
-                crate::protocol::failure("rpc_capacity", "MCP request capacity reached").into(),
-            );
-        };
         let call = ToolCall {
             name: request.name.into_owned(),
             arguments: Value::Object(request.arguments.unwrap_or_default()),
+        };
+        let Some(_permit) = self.requests.acquire(&call) else {
+            return Ok(
+                crate::protocol::failure("rpc_capacity", "MCP request capacity reached").into(),
+            );
         };
         // The owner detaches delivery bookkeeping from the disposable MCP facade.
         Ok(session::forward(call).await.into())

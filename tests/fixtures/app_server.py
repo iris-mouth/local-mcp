@@ -1,6 +1,23 @@
 #!/usr/bin/python3
 """Protocol fault fixture. It deliberately supplies no filesystem sandbox."""
-import sys, json, threading, base64, os, time
+import sys, json, threading, base64, os, time, pathlib
+
+# Only the capability gate's required fields; this fixture is not an API schema oracle.
+if sys.argv[1:3] == ['app-server', 'generate-json-schema']:
+    directory = pathlib.Path(sys.argv[sys.argv.index('--out') + 1])
+    (directory/'v2').mkdir(parents=True)
+    fields = {
+        'CommandExecParams': ['disableTimeout','disableOutputCap','streamStdoutStderr','streamStdin','env','processId','sandboxPolicy','tty','size'],
+        'CommandExecWriteParams': ['deltaBase64','closeStdin','processId'],
+        'CommandExecResizeParams': ['size','processId'],
+        'CommandExecTerminateParams': ['processId'],
+        'CommandExecOutputDeltaNotification': ['processId','stream','deltaBase64','capReached'],
+    }
+    for name, keys in fields.items():
+        (directory/'v2'/(name+'.json')).write_text(json.dumps({'properties': {key:{} for key in keys}}))
+    (directory/'ClientRequest.json').write_text(json.dumps(['initialize','command/exec','command/exec/write','command/exec/resize','command/exec/terminate']))
+    (directory/'ServerNotification.json').write_text(json.dumps(['command/exec/outputDelta']))
+    sys.exit(0)
 lock = threading.Lock()
 processes = {}
 def emit(value):
@@ -22,6 +39,13 @@ def run(request):
         for _ in range(16): output(pid, b'x'*1024)
         finish(pid, 0)
     elif mode == 'lose':
+        time.sleep(.03); os._exit(0)
+    elif mode == 'bad-output-then-lose':
+        output(pid, b'retained\n')
+        params = {'processId':pid, 'stream':'stdout', 'deltaBase64':'!invalid!'}
+        if p['command'][1] == 'missing': del params['deltaBase64']
+        if p['command'][1] == 'stream': params.update(stream='invalid', deltaBase64='eA==')
+        emit({'method':'command/exec/outputDelta', 'params':params})
         time.sleep(.03); os._exit(0)
     else:
         output(pid, b'ready\n')

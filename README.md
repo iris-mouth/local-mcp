@@ -106,7 +106,8 @@ Never recreate output by rerunning an uncertain command.
 Output cursors are non-consuming and bound to a runtime/job and byte positions.
 stdout/stderr stay separate, except PTY multiplexing into stdout. Buffer gaps,
 source truncation, lossy UTF-8 display and expiry are explicit. Known exit results
-survive output loss. `read_file` has no source-file size limit; oversized delivery
+survive output loss. `output_error` and `output_unavailable` retain output faults
+independently of execution or connection errors. `read_file` has no source-file size limit; oversized delivery
 returns a continuation or an explicit limit, preserving UTF-8 and CRLF.
 Images retain PNG/JPEG/GIF/WebP/BMP/TIFF/AVIF support. Actual visual use in ordinary
 ChatGPT still requires host acceptance testing; MIME/byte delivery alone is not
@@ -134,6 +135,13 @@ lifetime. The backend explicitly receives `disableTimeout` and `disableOutputCap
 Each stream uses half the per-job buffer. Text/image delivery budgets are derived
 from the message limit, including JSON/base64 expansion. These are configurable
 initial resource budgets; they are not transport-provider or performance guarantees.
+The owner reserves `max_rpc_inflight` slots each for work (including long status
+waits) and controls (session info, immediate status, input and stop). A separate
+pool of that size bounds incoming IPC frame reads; admitted requests retain their
+work/control slot through reply delivery. Each MCP facade likewise reserves 64
+slots per group. Backend control ACKs have their own `max_rpc_inflight` bound.
+Long waits therefore cannot consume the capacity reserved for controls; a group
+that is itself full still rejects further requests.
 See the [implementation verification record](.scratch/app-server-adapter/implementation.md)
 for the tested workload and remaining acceptance work.
 

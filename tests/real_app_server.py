@@ -61,7 +61,7 @@ def main():
         (project/'text.txt').write_bytes(b'before\r\n')
         subprocess.run(['git','-C',str(project),'add','text.txt'],check=True)
         index=(project/'.git/index').read_bytes()
-        config=root/'settings.json';config.write_text(json.dumps({'max_jobs':2,'extra_roots':[str(outside)],'allow_git_metadata':True,'allow_network':True}))
+        config=root/'settings.json';config.write_text(json.dumps({'max_jobs':2,'max_rpc_inflight':1,'extra_roots':[str(outside)],'allow_git_metadata':True,'allow_network':True}))
         session='acceptance-'+uuid.uuid4().hex[:12]
         env=os.environ.copy();env['CONTROL_PLANE_API_KEY']='synthetic-should-never-reach-command'
         owner=subprocess.Popen([str(BINARY),'start',session,'--config',str(config),'--codex',str(CODEX)],cwd=project,stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,env=env)
@@ -103,6 +103,12 @@ def main():
             check('host-user read outside write roots preserved',outside_read['ok'] and 'max_jobs' in outside_read['text'])
             read=data(tool(session,'read_file',runtime_id=runtime,path='text.txt'))
             check('UTF-8 CRLF preserved',read['text']=='before\r\n')
+            (project/'range.txt').write_bytes(b'first\r\n'+b'x'*(2*1024*1024)+b'\xff')
+            ranged=data(tool(session,'read_file',runtime_id=runtime,path='range.txt',start_line=1,max_lines=1))
+            check('requested line ignores oversized invalid UTF-8 following line',ranged['text']=='first\r\n' and ranged['lines_returned']==1 and ranged['has_more'] and ranged['next_line']==2)
+            link_patch='diff --git a/new-link b/new-link\nnew file mode 120000\n--- /dev/null\n+++ b/new-link\n@@ -0,0 +1 @@\n+'+str(outside)+'\n'
+            link_result=data(tool(session,'apply_diff',runtime_id=runtime,request_id='symlink-diff',diff=link_patch))
+            check('dedicated diff rejects new symlink before dispatch',not link_result['ok'] and 'job_id' not in link_result and not (project/'new-link').is_symlink())
             patch='diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+created\n'
             applied=data(tool(session,'apply_diff',runtime_id=runtime,request_id='patch',diff=patch))
             applied=wait(session,runtime,applied['job_id'])
@@ -124,6 +130,21 @@ def main():
             check('input redelivery uses original receipt',data(tool(session,'write_stdin',**inp))['delivery']=='accepted')
             tool(session,'write_stdin',runtime_id=runtime,job_id=p['job_id'],request_id='eof',eof=True)
             check('EOF exits and input is delivered once',wait(session,runtime,p['job_id'])['stdout']['text']=='one\n')
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                pending=pool.submit(tool,session,'exec_command',runtime_id=runtime,request_id='waiting-rpc',argv=['/bin/cat'],input_mode='pipe',wait_ms=30000)
+                deadline=time.monotonic()+10
+                while time.monotonic()<deadline:
+                    observed=data(tool(session,'command_status',runtime_id=runtime,request_id='waiting-rpc'))
+                    if (observed.get('error') or {}).get('code')=='not_found':continue
+                    check('status stays available during exec wait with one RPC slot',observed['ok'] and observed['state']=='running')
+                    break
+                else:raise TimeoutError('waiting exec receipt')
+                check('session info stays available during exec wait',data(tool(session,'session_info'))['runtime_id']==runtime)
+                written=data(tool(session,'write_stdin',runtime_id=runtime,job_id=observed['job_id'],request_id='waiting-rpc-input',data='one\n'))
+                check('input stays available during exec wait with one RPC slot',written['delivery']=='accepted')
+                stopped=data(tool(session,'stop_command',runtime_id=runtime,job_id=observed['job_id']))
+                check('stop stays available during exec wait with one RPC slot',stopped['stop_ack']['delivery']=='accepted')
+                check('original exec wait receives exit after concurrent stop',data(pending.result(timeout=10))['state']=='finished')
             running=run('stop',['/bin/sleep','60'])
             stop=data(tool(session,'stop_command',runtime_id=runtime,job_id=running['job_id']))
             check('stop ACK observed on original connection',stop['stop_ack']['delivery']=='accepted')

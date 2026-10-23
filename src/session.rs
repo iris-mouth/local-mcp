@@ -3,6 +3,7 @@ use crate::{
     config::{self, Settings},
     jobs::Jobs,
     protocol::*,
+    rpc_capacity::RpcCapacity,
 };
 use anyhow::{Context, Result, ensure};
 use rmcp::model::CallToolResult;
@@ -167,9 +168,10 @@ pub async fn start(id: Option<String>, settings: Settings, codex: PathBuf) -> Re
     let (backend, events) = AppServer::spawn(&codex, &session).await?;
     let jobs = Jobs::new(session, backend, events);
     eprintln!("Session ready: {}", jobs.session.id);
-    let capacity = Arc::new(tokio::sync::Semaphore::new(
+    let readers = Arc::new(tokio::sync::Semaphore::new(
         jobs.session.settings.max_rpc_inflight,
     ));
+    let requests = RpcCapacity::new(jobs.session.settings.max_rpc_inflight);
     let mut stdin = BufReader::new(tokio::io::stdin()).lines();
     let result: Result<()> = loop {
         tokio::select! {
@@ -180,20 +182,27 @@ pub async fn start(id: Option<String>, settings: Settings, codex: PathBuf) -> Re
                 Ok(Some(_))=>eprintln!("Use startup --config for trusted permission ceilings. /status or Ctrl-C."),
                 Err(e)=>break Err(e.into())
             }}
-            connection=listener.accept()=>{
-                let (stream,_)=match connection{Ok(c)=>c,Err(e)=>break Err(e.into())};
-                let Ok(permit)=capacity.clone().try_acquire_owned()else{drop(stream);continue;};
+            connection=async {
+                let permit=readers.clone().acquire_owned().await.expect("IPC reader capacity closed");
+                listener.accept().await.map(|(stream,_)|(stream,permit))
+            }=>{
+                let (stream,permit)=match connection{Ok(c)=>c,Err(e)=>break Err(e.into())};
                 let jobs=jobs.clone();
+                let requests=requests.clone();
                 tokio::spawn(async move {
-                    let _permit=permit;
                     // Peer identity supplements the existing per-user 0700 directory and 0600 socket.
                     if !stream.peer_cred().is_ok_and(|cred|cred.uid()==unsafe{libc::geteuid()}){return;}
                     let mut reader=BufReader::new(stream);
                     let cap=jobs.session.settings.max_message_bytes;
                     let Ok(Ok(Some(line)))=tokio::time::timeout(Duration::from_secs(5),read_frame(&mut reader,cap)).await else{return;};
-                    let result=match serde_json::from_slice::<ToolCall>(&line){
-                        Ok(call)=>dispatch(jobs,call).await,
-                        Err(_)=>failure("invalid_arguments","invalid session message")
+                    let call=serde_json::from_slice::<ToolCall>(&line);
+                    let request_permit=call.as_ref().ok().and_then(|call|requests.acquire(call));
+                    // Keep either admission or request capacity until the bounded reply completes.
+                    let _reader_permit=if request_permit.is_some(){drop(permit);None}else{Some(permit)};
+                    let result=match (call,&request_permit){
+                        (Ok(call),Some(_))=>dispatch(jobs,call).await,
+                        (Ok(_),None)=>failure("rpc_capacity","session request capacity reached"),
+                        (Err(_),_)=>failure("invalid_arguments","invalid session message")
                     };
                     let Ok(mut bytes)=serde_json::to_vec(&result)else{return;};
                     if bytes.len()>cap {bytes=serde_json::to_vec(&failure("delivery_limit","result exceeds session transport budget")).unwrap();}

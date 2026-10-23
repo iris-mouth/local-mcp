@@ -10,11 +10,22 @@ Updated: 2026-10-23
 - `start`が元App Server接続、runtime、受付記録、ジョブ、有限出力を所有する。既存セッションIPC上のMCP facadeは再生成可能とした。
 - 基本8用途と別の単発拡張実行を、strictな9ツールとして公開した。既存wrapperの`session_id`制約と接続キー非継承を維持する。
 - 固定認可上限は信頼された開始時JSONだけから決める。canonical cwdとrootの変更検査、追加root/network/fullの排他的指定、起動世代と依頼IDの照合を実装した。
-- Gitのnumstatで対象を解釈し、専用差分はcheck→applyを一度ずつ実行する。patchは準備通知後に元接続のstdinへ一度配送し、argv長上限や一時patchファイルへの保存を避けた。
+- Gitのsummary/numstatでmodeと対象を解釈し、専用差分はcheck→applyを一度ずつ実行する。patchは準備通知後に元接続のstdinへ一度配送し、argv長上限や一時patchファイルへの保存を避けた。
 - 入力ACKと消費、停止ACKと終了、単一job不明と接続喪失、出力欠落と既知の終了結果を分離した。
 - 画像はmacOS ImageIOに同じメモリ内bytesを渡し、寸法予算とデコードを検査する。独自codecや画像一時ファイルを追加していない。
 - 専用CODEX_HOME/sqlite領域、有限のcommand環境、不要exportの無効化、通常終了確認後だけの所有領域削除を実装した。
 - Nixの依存固定を新Cargo.lockへ合わせた。Nix自体のビルドは未検証。
+
+## 実装レビュー4件の修正
+
+実装コミット`bad5dda`に対するAstraのStandards 1件、Spec 3件を対象とする。
+
+- 出力異常の原因を`output_error`として実行・接続エラーと別に保持し、後から元接続が失われても`output_unavailable`を維持する。不正base64、field欠落、不正streamそれぞれの後に接続を失う回帰テストを追加した。
+- 長い実行・観測待ちと、session_info・待機なし照会・入力・停止に別の有限容量を確保した。IPC受信枠はdispatch待ちに保持せず、受信枠が埋まっている間はacceptを待つ。応答配送までは受付枠または処理枠を保持し、待機taskや応答bufferを無制限に作らない。
+- 専用diffはGitの`--summary`による作成・削除・変更modeも検査し、通常fileの`100644`/`100755`だけを受け付ける。Gitの解釈前のpatch本文からmodeを推測しない。新規symlink/submoduleと通常fileからsymlinkへの変更を拒否するテスト、通常fileのmode・本文を受理するテストを追加した。
+- read_fileの行数・返却byte数の終端判定を次行の読込み前へ移した。次のbytesの有無だけで続きのmetadataを返し、要求範囲外の長大行・不正UTF-8を読取失敗の原因にしない。CRLFと終端の続きなしも検査する。
+
+追加した実プロセスのMCP/IPC回帰テストでは、ownerのRPC設定1での実行待機中と、同じfacadeの64件の観測待機が満杯の状態を検査する。この2件は接続競合の修正後に各10回連続成功した。backendは故障注入用fixtureであり、sandboxの証拠にはしない。実App Serverの受入にもRPC設定1での並行照会・入力・停止、行範囲、新規symlink拒否を追加した。
 
 ## 変更理由を伴う初期資源設定
 
@@ -31,7 +42,7 @@ Updated: 2026-10-23
 | MCP/IPCメッセージ | 16 MiB、設定可能 | 12 MiB source textの行範囲読取と約11 MiB画像のbase64/JSON配送をstdio上で検証する。通常Chat経路の配送上限を証明する値ではない |
 | stdin/diff | 256 KiB / 1 MiB | 1依頼のメモリ・RPC占有を有限化する。source file全体の一律上限には転用しない |
 | 画像pixel数 | 32 Mi pixels | encoded bytesだけでは抑えられないraster展開を有限化する。metadataを先に確認し、最大128 MiBのRGBA rasterへ制限する |
-| RPC数、ACK待ち、終了待ち | 64、10秒、5秒 | 変更が滞留しても受け付け続けない。観測待ちやACK超過を実行期限・終了証明へ読み替えない |
+| RPC数、ACK待ち、終了待ち | 各容量64、10秒、5秒 | ownerのworkとcontrol、IPC受信、backendのACKに個別の有限容量を設ける。MCP facadeもwork/control各64を確保する。長い待機が照会・入力・停止の予約枠を使わない。観測待ちやACK超過を実行期限・終了証明へ読み替えない |
 
 ## 検証の区別
 
@@ -45,12 +56,12 @@ Updated: 2026-10-23
 
 - `cargo fmt --check`: 成功。
 - `cargo clippy --locked --offline --all-targets -- -D warnings`: 成功。
-- `cargo test --locked --offline`: 契約テスト11件成功。
+- `cargo test --locked --offline`: 契約テスト14件、実プロセスのMCP/IPCテスト2件、計16件成功。
 - `cargo build --release --locked --offline`: 成功。
-- 同じreleaseバイナリによる実App Server試験: 59項目成功。試験中にバイナリと対象ソースが変わっていないこともhashで確認した。
+- 同じreleaseバイナリによる実App Server試験: 66項目成功。試験中にバイナリと対象ソースが変わっていないこともhashで確認した。
 - 環境: macOS 27.0.1、codex-cli 0.163.0-alpha.10.2。公式CLIとadapterのhashは機械可読記録へ保存した。
 
-59項目では、root内成功・範囲外/symlink/cwd拒否、限定拡張と全面解除、Git metadataとlinked worktree、重複配送、接続張り直し、closed/pipe/PTY入力、停止、7画像形式、配送量、30秒待ちと期限無効化、通常終了時の専用領域削除を実機確認した。
+66項目では、root内成功・範囲外/symlink/cwd拒否、限定拡張と全面解除、Git metadataとlinked worktree、重複配送、接続張り直し、closed/pipe/PTY入力、停止、7画像形式、配送量、30秒待ちと期限無効化、通常終了時の専用領域削除を実機確認した。レビュー修正に追加した7項目は、要求外の長大行、新規symlink拒否、RPC設定1での待機中の照会・入力・停止・元実行の終了観測を検証する。
 
 疑似backendでは元接続喪失、入力ACK喪失、停止ACK後も未終了、出力の欠落/期限切れ、受付容量、root差し替え、既知終了と出力異常の分離を確認した。実機での同じ障害注入は未実施。
 
@@ -58,12 +69,12 @@ release版の大出力試験で記録したピークRSS（KiB）:
 
 | source出力 | adapter | App Server |
 | --- | --- | --- |
-| 64 MiB | 72896 | 68032 |
-| 256 MiB | 77136 | 70496 |
+| 64 MiB | 73024 | 67248 |
+| 256 MiB | 77152 | 69904 |
 
 どちらもsourceの総byte位置が実出力と一致し、source側切詰めなし、保持bufferの欠落ありと確認した。backendで全寿命の出力全量に比例するmemory増加は、この2負荷の観測では見られなかった。これは長期運用・全並行条件・他版でのmemory上限の証明ではない。
 
-修正過程では、sipsのファイル出力検証を破棄してメモリ内ImageIOへ切り替えた。full modeの余分なfieldがSerdeのunit variantで無視される点も実機試験で検出し、strictなstruct variantへ修正した。拒否条件の回帰テストを11件に含めている。
+修正過程では、sipsのファイル出力検証を破棄してメモリ内ImageIOへ切り替えた。full modeの余分なfieldがSerdeのunit variantで無視される点も実機試験で検出し、strictなstruct variantへ修正した。拒否条件の回帰テストを契約テスト14件に含めている。
 
 ## 未実施の受入・範囲
 

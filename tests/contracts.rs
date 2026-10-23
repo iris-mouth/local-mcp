@@ -383,6 +383,102 @@ async fn known_exit_survives_incompatible_output_and_cursor_is_job_bound() {
     );
     assert!(j.shutdown().await);
 }
+
+#[tokio::test]
+async fn output_unavailability_survives_subsequent_backend_loss() {
+    for fault in ["base64", "missing", "stream"] {
+        let (_dir, j) = setup(Settings::default()).await;
+        let result = j
+            .execute(
+                exec(&j, "bad-output", &["bad-output-then-lose", fault]),
+                None,
+                None,
+            )
+            .await
+            .structured_content
+            .unwrap();
+        let done = terminal(&j, result["job_id"].as_str().unwrap()).await;
+        assert_eq!(done["state"], "unknown");
+        assert_eq!(done["error"], "backend_unavailable");
+        assert_eq!(done["output_unavailable"], true, "{fault}");
+        assert_eq!(done["output_error"], "invalid_backend_output");
+        assert_eq!(done["stdout"]["text"], "retained\n");
+        j.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn line_range_does_not_read_or_validate_the_following_line() {
+    let (_dir, j) = setup(Settings::default()).await;
+    let path = j.session.cwd.join("lines.txt");
+    let mut bytes = b"first\r\n".to_vec();
+    bytes.extend(vec![b'x'; j.session.settings.max_message_bytes / 8]);
+    bytes.push(0xff);
+    std::fs::write(&path, &bytes).unwrap();
+    let args = ReadArgs {
+        session_id: j.session.id.clone(),
+        runtime_id: j.session.runtime_id.clone(),
+        path: "lines.txt".into(),
+        start_line: Some(1),
+        max_lines: Some(1),
+    };
+    let first = files::read(&j.session, args.clone())
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(first["text"], "first\r\n");
+    assert_eq!(first["lines_returned"], 1);
+    assert_eq!(first["has_more"], true);
+    assert_eq!(first["next_line"], 2);
+    std::fs::write(&path, b"first\r\n").unwrap();
+    let last = files::read(&j.session, args)
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(last["text"], "first\r\n");
+    assert_eq!(last["has_more"], false);
+    assert!(last["next_line"].is_null());
+    assert!(j.shutdown().await);
+}
+
+#[tokio::test]
+async fn dedicated_diff_rejects_non_regular_target_modes() {
+    let (_dir, j) = setup(Settings::default()).await;
+    for mode in ["120000", "160000"] {
+        let patch = format!(
+            "diff --git a/link b/link\nnew file mode {mode}\n--- /dev/null\n+++ b/link\n@@ -0,0 +1 @@\n+/tmp/outside\n"
+        );
+        assert!(
+            files::validate_diff(&j.session, &patch).await.is_err(),
+            "{mode}"
+        );
+        let result = j
+            .apply_diff(DiffArgs {
+                session_id: j.session.id.clone(),
+                runtime_id: j.session.runtime_id.clone(),
+                request_id: mode.into(),
+                diff: patch,
+            })
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(!j.session.cwd.join("link").exists());
+    }
+    for mode in ["100644", "100755"] {
+        let patch = format!(
+            "diff --git a/new.txt b/new.txt\nnew file mode {mode}\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new file mode 120000\n"
+        );
+        assert!(
+            files::validate_diff(&j.session, &patch).await.is_ok(),
+            "{mode}"
+        );
+    }
+    std::fs::write(j.session.cwd.join("regular.txt"), b"text\n").unwrap();
+    let patch = "diff --git a/regular.txt b/regular.txt\nold mode 100644\nnew mode 120000\n";
+    assert!(files::validate_diff(&j.session, patch).await.is_err());
+    assert!(j.shutdown().await);
+}
 #[test]
 fn session_ids_and_socket_paths_preserve_existing_constraints() {
     use local_mcp::config::{socket_path, validate_session_id};

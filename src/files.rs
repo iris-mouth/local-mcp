@@ -28,6 +28,10 @@ pub async fn read(session: &Session, args: ReadArgs) -> Result<CallToolResult> {
         let mut count = 0usize;
         let mut more = false;
         loop {
+            if count >= max_lines || text.len() == cap {
+                more = !reader.fill_buf()?.is_empty();
+                break;
+            }
             let mut line = Vec::new();
             let mut found = false;
             let mut eof = false;
@@ -60,7 +64,7 @@ pub async fn read(session: &Session, args: ReadArgs) -> Result<CallToolResult> {
                 break;
             }
             if number >= start {
-                if count >= max_lines || text.len() + line.len() > cap {
+                if text.len() + line.len() > cap {
                     more = true;
                     break;
                 }
@@ -141,14 +145,14 @@ pub fn image_mime(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// Git parses the patch. This adapter only checks Git's NUL-delimited target list.
-pub async fn validate_diff(session: &Session, patch: &str) -> Result<()> {
+/// Read metadata interpreted by Git rather than parsing model-supplied patch headers.
+async fn diff_metadata(session: &Session, patch: &str, format: &str) -> Result<Vec<u8>> {
     let mut child = tokio::process::Command::new("git")
         .args([
             "-c",
             "core.hooksPath=/dev/null",
             "apply",
-            "--numstat",
+            format,
             "-z",
             "--recount",
             "--whitespace=nowarn",
@@ -157,6 +161,7 @@ pub async fn validate_diff(session: &Session, patch: &str) -> Result<()> {
         .current_dir(&session.cwd)
         .env_clear()
         .envs(&session.environment)
+        .env("LC_ALL", "C")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -173,8 +178,24 @@ pub async fn validate_diff(session: &Session, patch: &str) -> Result<()> {
         .await??;
     writer.await??;
     ensure!(output.status.success(), "Git rejected diff syntax");
+    Ok(output.stdout)
+}
+
+pub async fn validate_diff(session: &Session, patch: &str) -> Result<()> {
+    let summary = diff_metadata(session, patch, "--summary").await?;
+    for line in std::str::from_utf8(&summary)?.lines() {
+        let fields: Vec<_> = line.split_ascii_whitespace().collect();
+        let regular = |mode: &str| matches!(mode, "100644" | "100755");
+        let modes_valid = match fields.as_slice() {
+            ["create" | "delete", "mode", mode, ..] => regular(mode),
+            ["mode", "change", old, "=>", new, ..] => regular(old) && regular(new),
+            _ => true,
+        };
+        ensure!(modes_valid, "patch target must be a regular text file");
+    }
+    let targets = diff_metadata(session, patch, "--numstat").await?;
     let mut count = 0;
-    for entry in output.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+    for entry in targets.split(|b| *b == 0).filter(|p| !p.is_empty()) {
         let parts: Vec<_> = entry.splitn(3, |b| *b == b'\t').collect();
         ensure!(
             parts.len() == 3 && parts[0] != b"-" && parts[1] != b"-",

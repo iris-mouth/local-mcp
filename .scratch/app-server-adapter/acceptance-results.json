@@ -1,5 +1,5 @@
 {
-  "checks_passed": 59,
+  "checks_passed": 66,
   "checks": [
     "App Server starts without login/model calls",
     "concurrency ceiling reflects trusted config",
@@ -17,6 +17,8 @@
     "command environment excludes control key and backend home",
     "host-user read outside write roots preserved",
     "UTF-8 CRLF preserved",
+    "requested line ignores oversized invalid UTF-8 following line",
+    "dedicated diff rejects new symlink before dispatch",
     "Git check then apply creates text file",
     "diff redelivery does not reapply",
     "Git index is unchanged",
@@ -26,6 +28,11 @@
     "pipe input accepted",
     "input redelivery uses original receipt",
     "EOF exits and input is delivered once",
+    "status stays available during exec wait with one RPC slot",
+    "session info stays available during exec wait",
+    "input stays available during exec wait with one RPC slot",
+    "stop stays available during exec wait with one RPC slot",
+    "original exec wait receives exit after concurrent stop",
     "stop ACK observed on original connection",
     "stop waits for final exec result",
     "PTY output is explicitly multiplexed",
@@ -69,30 +76,31 @@
     {
       "source_mib": 64,
       "peak_rss_kib_by_pid": {
-        "8930": 72896,
-        "8934": 68032
+        "30739": 73024,
+        "30743": 67248
       }
     },
     {
       "source_mib": 256,
       "peak_rss_kib_by_pid": {
-        "8930": 77136,
-        "8934": 70496
+        "30739": 77152,
+        "30743": 69904
       }
     }
   ],
-  "adapter_executable_sha256": "1d1aa91c132faf6ebf2cf7d5b4a07013207a69460f0a88b526e2a02ab10a696f",
+  "adapter_executable_sha256": "068b83de3cf0c6faef324db436731402027451fe1a167d763015010654a101b6",
   "source_sha256": {
     "src/app_server.rs": "fe0e04099dc6450d229bb9ca8144689fd459171f9076cfeb1a2daf8b3d29e308",
     "src/config.rs": "59b0541767a8159d3e9bf4e8aa13bf6d0cb62b8bd3fa9a7ba25521612409e9be",
-    "src/files.rs": "2bd9ad7c5f26bd75c91f2853ebd53d2fcda9547a969532990c31e0e3bc911616",
+    "src/files.rs": "bc535237cffc1f2cd098fd4fdbabfdb40588b90c8d77cd0388e99e9158e76ff5",
     "src/image_validation.rs": "015ee31ee9910248b9d829bc5496d32c65a6d0e7a5608df605e294b55c54ff2d",
-    "src/jobs.rs": "b509a3e9f63e32e8d4377987aa0ba771d140b5402f9f4a7467740d7f3839720e",
-    "src/lib.rs": "9352ce1bd64f2c9492fdd566760437d2498543a9226b1187e0de9aebce5d2c43",
+    "src/jobs.rs": "e9f236b0715f72a6ad906865e9e7c9972a312ae2d2ad35369f02a2aed24c025c",
+    "src/lib.rs": "6bb884f99f12b8ce671ad73406576be97c8f17911ec69e4e1d051a94986de71e",
     "src/main.rs": "3235fa45372cad1eaa08a45251b213bcaa5d08c5dc58f54ae052b6b4c0e71735",
-    "src/mcp.rs": "f1f99b453344fe1fad9f3cef81825838ce645e366798962f044069279dd5ccd6",
+    "src/mcp.rs": "2b8dc0fb08a54238f6846ac7abf4166332ded9ec70ae0dad056ac7fbb673e1ea",
     "src/protocol.rs": "79837a0e92be4f391673bd43f7d311045158102480e87227e1d6c37d7226db30",
-    "src/session.rs": "0da08e38fa293349bda0ff6877a61ce72eaa9ce44866907a92bd2ba31e6536fc",
+    "src/rpc_capacity.rs": "45d3d283468d44d268b51bcdad37b8dfe8d7736aa64e6ecb2addb1fac7e21708",
+    "src/session.rs": "f46d140366541941b40f8ea8703f883595b0211b6d1b6790a0197949014b231d",
     "Cargo.toml": "cc87616500a385f9edd557d2a8ad9f05408ff584b0955c5ab49af46b70756a25",
     "Cargo.lock": "b10b46653455125878fb555ab762e10ca4934eb569b841a5299f8c3b513762bb"
   }
