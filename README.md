@@ -2,13 +2,58 @@
 
 A Rust MCP adapter for local work through the official Codex App Server. ChatGPT
 makes the decisions; local-mcp uses the public `command/exec` protocol without
-starting a Codex model, thread, or turn. The existing chatgpt-mcp wrapper, Tunnel,
-Keychain and connection lifecycle remain responsible for the MCP connection.
+starting a Codex model, thread, or turn. Its Rust CLI also prepares an independent
+runtime and manages the official Tunnel client for a selected project.
 
 The required acceptance platform is macOS. This revision does not provide a
 qualified Linux/Windows deployment.
 
 ## Run
+
+To prepare the Tunnel runtime in a **new directory**, use:
+
+```sh
+local-mcp prepare --destination /new/runtime/directory \
+  --tunnel-id tunnel_EXAMPLE \
+  --tunnel-client /absolute/path/to/tunnel-client \
+  --codex /absolute/path/to/official/codex
+```
+
+Preparation copies the binaries, records their SHA256 in `runtime.json`, and
+generates a profile and a short Finder launcher. It never reads credentials,
+starts services, or overwrites an existing directory. Keep the generated runtime
+at its prepared absolute path. Prepare again at a new path to update it.
+
+The existing macOS Keychain item `chatgpt-mcp-tunnel` is the default credential
+source. `--keychain-service` and `--keychain-account` select an existing item;
+preparation never creates or modifies it. The Tunnel credential helper runs in a
+separate child process and execs the official client. The session owner never
+receives the key, and the profile removes it before executing the MCP facade.
+
+Start work with `start-local.command /absolute/project/path`, or:
+
+```sh
+/new/runtime/directory/bin/local-mcp connect /absolute/project/path \
+  --runtime /new/runtime/directory
+```
+
+Omit the project to enter it interactively. Pass `connect --config settings.json`
+for the same trusted execution ceilings as `start --config`. App Server must
+initialize successfully before the Tunnel starts. Client startup does **not**
+prove remote readiness; inspect the printed health URL file and `/readyz`.
+`/status` reports the session and client state. `/tunnel-restart` restarts only
+connectivity while preserving the original session, App Server, jobs and receipts.
+Unexpected client exit permits at most three restarts, after 1, 2 and 4 seconds.
+Credential/startup failures await manual intervention. Ctrl-C, stdin EOF, TERM or
+HUP stop the owned client and the session. The same Tunnel ID is exclusive among
+new local-mcp launchers; old chatgpt-mcp launchers do not participate in this lock
+and must be stopped before switching.
+
+The deployed runtime requires no Python. The test drivers use Python for isolated
+fixtures. [Migration and recovery](.scratch/connection-runtime/migration.md)
+describe reviewing the new runtime before switching the shared connection.
+
+### Local stdio operation
 
 Install an official Codex CLI with the required public command capabilities,
 then build this repository with Rust 1.96:
@@ -30,7 +75,7 @@ and request receipts. MCP facade processes can disconnect and reconnect while
 that owner and backend stay alive. There is no recovery across owner/backend
 restarts, automatic command replay, or additional daemon/connection path.
 
-`LOCAL_MCP_SESSION`, when set by the existing wrapper, restricts the facade to
+`LOCAL_MCP_SESSION`, set by the trusted Tunnel launcher, restricts the facade to
 that session. Every tool requires `session_id`. Call `session_info` first and
 include its `runtime_id` in later calls. Old runtime identifiers are rejected.
 

@@ -1,0 +1,41 @@
+{
+  "destination": "/Users/mitsuhiro/.local/share/local-mcp",
+  "binary_sha256": "01cdb2db923a03b3a20ab414968aed4e6a24451fc7a806da64f46f03525011b2",
+  "deployment": "complete",
+  "plugin_id": "plugin_asdk_app_6abe1312e0b0819197da242e74d7d440",
+  "plugin_display_name": "local-mcp",
+  "permissions": "low_risk_operations_allowed_unchanged",
+  "tunnel_id": "same_as_previous",
+  "real_tunnel_acceptance": [
+    "session_info",
+    "read_file",
+    "exec_exit_0",
+    "outside_write_denied",
+    "apply_diff_exit_0_verified_on_disk",
+    "native_image_response",
+    "manual_tunnel_restart_retains_original_runtime_and_job",
+    "ctrl_c_exit_0",
+    "owned_socket_and_diagnostics_removed"
+  ],
+  "reconnect_observation": "Initial read-only status timed out during Keychain confirmation. After the user authorized access, the original runtime/job returned exit 0 without command replay.",
+  "test_session": "ff81f7e3-91e3-43bc-ad0a-913a9a98156f",
+  "test_runtime": "d8b20c2a-d03b-4d78-a23e-eff275c9711c",
+  "test_job": "174ef3e4-58e0-4930-9875-ad179f62df03",
+  "test_session_final_state": "stopped_cleanly",
+  "ordinary_chat_visual_acceptance": "not_run",
+  "acceptance_host": "this Codex chat using the existing connected MCP tools through the real Tunnel",
+  "gbrain_ready": 200,
+  "old_runtime_unchanged": true,
+  "protected_file_checks": {
+    "bin/local-mcp": true,
+    "client/tunnel-client": true,
+    "start-local.command": true,
+    "run-tunnel.py": true,
+    "local-mcp-stdio.py": true,
+    "keychain.py": true,
+    "setup-keychain.command": true,
+    "profiles/local-workspace.yaml": true,
+    "profiles/gbrain-memory.yaml": true,
+    "com.mitsuhiro.chatgpt-gbrain.plist": true
+  }
+}

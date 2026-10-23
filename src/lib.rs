@@ -1,5 +1,7 @@
 pub mod app_server;
 pub mod config;
+#[cfg(unix)]
+pub mod connection;
 pub mod files;
 mod image_validation;
 pub mod jobs;

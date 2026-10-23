@@ -1,0 +1,84 @@
+{
+  "staged_runtime": "/private/tmp/local-mcp-runtime-review-20261024-75831e0e",
+  "staged_binary_sha256": "01cdb2db923a03b3a20ab414968aed4e6a24451fc7a806da64f46f03525011b2",
+  "official_client_doctor_exit": 0,
+  "protected_runtime_sha256": {
+    "bin/local-mcp": "aac73f21e39f1183e09c0fa7b6b727d230e9ab337edba835e3b53601ffd26460",
+    "client/tunnel-client": "f534872593a60b12560b6c74cbbf94adf6f7e1d9fdd67a3f59b8268ff8a8249c",
+    "start-local.command": "e4c9cef845cc4991452e2e40b4d476f9b4d2b37be301de8527669d53bf4aeba0",
+    "run-tunnel.py": "b57ddb8800ebadb577abc58d0a25af6cdd4a31a7b138642f4afb4414731187f2",
+    "local-mcp-stdio.py": "aa2cb06549ba82d85f98260e93887dee4ea415356202b50848c2083feeb42f70",
+    "keychain.py": "be4b4019ff5787069e12a5d1d8290206137b77a152321e2a6919b9a2fb67188c",
+    "setup-keychain.command": "2e7ac999485142414321014f1884a0169f0a36ffed43456888187ee789b4a72d",
+    "profiles/local-workspace.yaml": "6ca872d106af5e84884ed84008ae9d50ac1e09584b1360a2d60f2381e27213bb",
+    "profiles/gbrain-memory.yaml": "76c6cd0bb4a1bf39f107ffe30b498ed33e11c8d1cad994953a7eef3ff67a7b1a",
+    "com.mitsuhiro.chatgpt-gbrain.plist": "ecf56188fe0a809bcab971f4fa67bdf5d9249f4c52e825e3440d6c3e811cdb89"
+  },
+  "protected_files_unchanged": true,
+  "production_switch": "not_run",
+  "real_tunnel": "not_run",
+  "keychain_read": "not_run",
+  "ordinary_chat_acceptance": "not_run",
+  "official_client_checks": [
+    {
+      "id": "config_source",
+      "status": "PASS"
+    },
+    {
+      "id": "profile_load",
+      "status": "PASS"
+    },
+    {
+      "id": "tunnel_id",
+      "status": "PASS"
+    },
+    {
+      "id": "control_plane_api_key",
+      "status": "PASS"
+    },
+    {
+      "id": "tunnels_management_url",
+      "status": "PASS"
+    },
+    {
+      "id": "runtime_api_keys_url",
+      "status": "PASS"
+    },
+    {
+      "id": "admin_api_keys_url",
+      "status": "PASS"
+    },
+    {
+      "id": "chatgpt_connector_settings_url",
+      "status": "PASS"
+    },
+    {
+      "id": "mcp_target",
+      "status": "PASS"
+    },
+    {
+      "id": "mcp_command_executable",
+      "status": "PASS"
+    },
+    {
+      "id": "mcp_server_reachable",
+      "status": "SKIP"
+    },
+    {
+      "id": "oauth_metadata",
+      "status": "SKIP"
+    },
+    {
+      "id": "health_listener",
+      "status": "PASS"
+    },
+    {
+      "id": "ui",
+      "status": "PASS"
+    },
+    {
+      "id": "codex_plugin",
+      "status": "SKIP"
+    }
+  ]
+}

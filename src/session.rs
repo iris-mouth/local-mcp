@@ -142,6 +142,28 @@ fn bind(id: &str) -> Result<(tokio::net::UnixListener, SocketGuard)> {
 
 #[cfg(unix)]
 pub async fn start(id: Option<String>, settings: Settings, codex: PathBuf) -> Result<()> {
+    start_inner(id, settings, codex, std::env::current_dir()?, None).await
+}
+
+#[cfg(unix)]
+pub async fn start_connected(
+    id: Option<String>,
+    settings: Settings,
+    codex: PathBuf,
+    cwd: PathBuf,
+    connection: crate::connection::Connection,
+) -> Result<()> {
+    start_inner(id, settings, codex, cwd, Some(connection)).await
+}
+
+#[cfg(unix)]
+async fn start_inner(
+    id: Option<String>,
+    settings: Settings,
+    codex: PathBuf,
+    cwd: PathBuf,
+    mut connection: Option<crate::connection::Connection>,
+) -> Result<()> {
     settings.validate()?;
     let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     config::validate_session_id(&id)?;
@@ -150,7 +172,7 @@ pub async fn start(id: Option<String>, settings: Settings, codex: PathBuf) -> Re
         .prefix("local-mcp-runtime-")
         .tempdir()?
         .keep();
-    let session = config::Session::new(id, std::env::current_dir()?, &directory, settings)?;
+    let session = config::Session::new(id, cwd, &directory, settings)?;
     eprintln!(
         "local-mcp session: {}\nruntime: {}\ncwd: {}\nwrite roots: {:?}\nGit metadata candidates: {:?}\nexpanded ceiling: roots={:?}, network={}, full={}\ndiagnostics (may contain command bodies): {}\nmax_jobs: {}\nPress Ctrl-C or close stdin to stop. /status prints current state.",
         session.id,
@@ -174,11 +196,23 @@ pub async fn start(id: Option<String>, settings: Settings, codex: PathBuf) -> Re
     // Schema checking retains default terminal signal handling. Once the backend
     // is isolated, handle interrupts even while its initialization is pending.
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
     let (backend, events) = AppServer::spawn_interruptible(&codex, &session, async {
-        interrupt.recv().await;
+        tokio::select! {
+            _=interrupt.recv()=>{},
+            _=terminate.recv()=>{},
+            _=hangup.recv()=>{},
+        }
     })
     .await?;
     let jobs = Jobs::new(session, backend, events);
+    if let Some(connection) = &mut connection
+        && let Err(error) = connection.start(&jobs.session.id)
+    {
+        // The owner can still observe/stop existing work while connectivity is down.
+        eprintln!("Tunnel startup failed: {error}; use /tunnel-restart after resolving it.");
+    }
     eprintln!("Session ready: {}", jobs.session.id);
     let readers = Arc::new(tokio::sync::Semaphore::new(
         jobs.session.settings.max_rpc_inflight,
@@ -196,12 +230,26 @@ pub async fn start(id: Option<String>, settings: Settings, codex: PathBuf) -> Re
             }
         }
     });
+    let mut tunnel_poll = tokio::time::interval(Duration::from_millis(250));
     let result: Result<()> = loop {
         tokio::select! {
+            _=tunnel_poll.tick(), if connection.is_some()=>{
+                if let Some(connection)=&mut connection && let Err(error)=connection.tick(&jobs.session.id) {
+                    eprintln!("Tunnel supervision failed: {error}. Inspect connectivity with /status.");
+                }
+            }
             _=interrupt.recv()=>{break Ok(());}
+            _=terminate.recv()=>{break Ok(());}
+            _=hangup.recv()=>{break Ok(());}
             line=stdin.recv()=>{match line {
                 None=>break Ok(()),
-                Some(Ok(line)) if line.trim()=="/status"=>eprintln!("{}",jobs.info().structured_content.unwrap()),
+                Some(Ok(line)) if line.trim()=="/status"=>{
+                    eprintln!("{}",jobs.info().structured_content.unwrap());
+                    if let Some(connection)=&connection { connection.status(); }
+                },
+                Some(Ok(line)) if line.trim()=="/tunnel-restart" && connection.is_some()=>{
+                    if let Err(error)=connection.as_mut().unwrap().restart(&jobs.session.id).await { eprintln!("Tunnel restart failed: {error}"); }
+                },
                 Some(Ok(_))=>eprintln!("Use startup --config for trusted permission ceilings. /status or Ctrl-C."),
                 Some(Err(e))=>break Err(e.into())
             }}
@@ -235,6 +283,10 @@ pub async fn start(id: Option<String>, settings: Settings, codex: PathBuf) -> Re
             }
         }
     };
+    let tunnel_result = match &mut connection {
+        Some(connection) => connection.stop().await,
+        None => Ok(()),
+    };
     let confirmed = jobs.shutdown().await;
     if confirmed {
         tokio::fs::remove_dir_all(&directory)
@@ -246,7 +298,7 @@ pub async fn start(id: Option<String>, settings: Settings, codex: PathBuf) -> Re
             directory.display()
         );
     }
-    result
+    result.and(tunnel_result)
 }
 #[cfg(not(unix))]
 pub async fn start(_: Option<String>, _: Settings, _: PathBuf) -> Result<()> {

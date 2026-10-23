@@ -1,0 +1,18 @@
+{
+  "review_model": "gpt-6-astra",
+  "standards": "no_blocking_findings",
+  "spec": "P2_fixed_then_no_actionable_findings",
+  "fixed_issue": "collect owned group before reaping crashed leader; handle Darwin empty-group EPERM only after inspection",
+  "deployment": "/Users/mitsuhiro/.local/share/local-mcp",
+  "previous_runtime_backup": "/Users/mitsuhiro/.local/share/local-mcp-before-astra-20261024-80102f20",
+  "previous_binary_sha256": "01cdb2db923a03b3a20ab414968aed4e6a24451fc7a806da64f46f03525011b2",
+  "binary_sha256": "7e3737e3b27b98ee54cdb8130b3956b191a42d0214bc184311c416efc23c234d",
+  "deployment_state": "updated_stopped",
+  "credential_and_tunnel_configuration": "unchanged",
+  "real_tunnel_retest": "not_run_for_cleanup_only_fix",
+  "isolated_tests": "21 cargo tests; connection lifecycle regression; shutdown regressions passed",
+  "release_connection_regression": "passed",
+  "ordinary_chat_visual_acceptance": "not_run",
+  "official_app_server_checks_passed": 66,
+  "source_hashes_match_verified_release": true
+}
