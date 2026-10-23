@@ -107,7 +107,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         (
             "view_image",
-            "Return native MCP image content for PNG/JPEG/GIF/WebP/BMP/TIFF/AVIF. Actual visual use depends on host support.",
+            "Return native MCP image content and a JSON text receipt for PNG/JPEG/GIF/WebP/BMP/TIFF/AVIF. When the host exposes content_items, emit its image item with the image output helper; text metadata alone is not visual recognition.",
             vec![("path", string())],
             vec!["path"],
             true,
@@ -190,9 +190,12 @@ pub fn tools() -> Vec<Tool> {
         if name == "write_stdin" {
             schema["oneOf"] = json!([{"required":["data"],"not":{"anyOf":[{"required":["eof"]},{"required":["resize"]}]}},{"required":["eof"],"not":{"anyOf":[{"required":["data"]},{"required":["resize"]}]}},{"required":["resize"],"not":{"anyOf":[{"required":["eof"]},{"required":["data"]}]}}]);
         }
-        let value = json!({"name":name,"description":description,"inputSchema":schema,
+        let mut value = json!({"name":name,"description":description,"inputSchema":schema,
             "outputSchema":{"type":"object","properties":{"schema_version":integer(),"ok":{"type":"boolean"}},"required":["schema_version","ok"]},
             "annotations":{"readOnlyHint":read_only,"destructiveHint":!read_only,"idempotentHint":read_only||name=="stop_command","openWorldHint":name=="exec_command_expanded"}});
+        if name == "view_image" {
+            value.as_object_mut().unwrap().remove("outputSchema");
+        }
         result.push(serde_json::from_value(value).expect("static tool schema"));
     }
     result

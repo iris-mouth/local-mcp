@@ -1,7 +1,7 @@
 # MCP画像のモデル視覚利用の切り分け
 
 Date: 2026-10-23 (Asia/Tokyo)
-Status: legacy content_items path passed; new view_image retest failed because ordinary Chat exposed structured metadata without image content; legacy catalog restored and all test connections stopped
+Status: fixed view_image passed ordinary Chat blind visual acceptance; legacy catalog restored and all test connections stopped
 
 ## 結果
 
@@ -10,6 +10,8 @@ Status: legacy content_items path passed; new view_image retest failed because o
 新規通常Chatの構造検査では、返却オブジェクトが`{content: string, content_items: ...}`だった。Chatが想定した標準MCPの`content: ContentBlock[]`ではなく、画像出力の条件分岐に入っていなかった。この呼出しで画像がモデルへ出力されない直接の要因は返却構造の取り違え。後続試験で`content_items[0]`にnative imageが保持されていることと、image helperへ渡すことで通常Chatが5図形の視覚回答を生成できることを確認した。本人許可後の正解manifestとの事後照合で、5図形すべての色・形・相対位置が一致した。画像bytes自体の恒常的なTunnel欠落とは区別する。
 
 ただし、その後の新view_image再試験ではcontent_items自体が通常Chatへ公開されず、structuredContentと同じメタデータだけが見えた。旧版の返却構造の取り違えと、新版の画像ブロック非公開は分けて扱う。新実装の視覚受入は未達。
+
+最終的には成功したview_imageだけstructuredContent/outputSchemaを除外し、識別子付きJSON textとnative imageを返す修正で通常Chatの視覚受入が合格した。以下の未達記録は修正前の観測である。最新の修正・受入・復元状況は末尾を参照。
 
 ## 判定点と手順上の制約
 
@@ -199,3 +201,38 @@ image output = unsupported_bytes_shape（image helperへ渡せず）
 本人のKeychain一度だけ許可後、旧復元用Tunnelのreadyz=200。管理UIの「ツールを更新」を実行し、通常Chatを再読込した。Chatは旧10ツールを実際に列挙し、get_imageあり・view_image/apply_diff/exec_command等なしを確認。復元用sessionのsession_infoを1回呼び、cwdが同じ使い捨てprojectと完全一致した。画像取得や実行操作はさせていない。管理画面の権限は引き続き「低リスクの操作を許可」。
 
 exec58225のsession_info履歴と、親PID63322が当該project用start-local.commandであることを確認後、Ctrl-Cでexit130。新旧の試験owner/Tunnel/facadeが消失し、既存GBrain Tunnel PID32053のみ残ることを確認した。GBrain readyz=200、本番5ファイルのhashはこの試験開始前snapshotと一致。新ownerの専用診断領域も不存在。共有catalogの一時更新と旧10への復元は完了し、未達の視覚受入を成功とは扱わず記録を確定する。
+
+## 修正後の通常Chat視覚受入
+
+本人が修正、視覚受入後のcommit、astraレビュー、および試験接続・共有定義の一時更新/復元・画像取得・正解manifestの事後採点を許可した。修正前の実Chat再現に加え、実プロセスMCP/IPCの回帰テストを先に追加し、outputSchemaの存在で失敗することを確認した。このローカル回帰は応答契約を固定するもので、視覚成功の代用ではない。
+
+変更は成功したview_imageだけを対象とする。dispatchでsession/runtimeをJSON text receiptへ付けた後structuredContentを除き、このツールのoutputSchemaも除いた。native image、path/MIME/bytes、schema_version/ok、scope検査を保持し、画像エラーと他8ツールの構造化結果は維持した。説明にはhostがcontent_itemsを返す場合の画像出力helper利用を加えた。ホスト内部の優先処理そのものの実装箇所は不明だが、構造化出力契約を外した今回の変更で画像配送が回復した。
+
+検証:
+
+- fmt/clippy（warningsなし）、全17テスト（14 contracts + 3 transport）成功。
+- 公式App ServerとmacOS sandboxの実機66項目成功。7画像形式、不正画像拒否、11 MiB画像配送も含む。証拠はimage-fix-acceptance-results.json。記載のordinary_chat_visual_acceptance=not_runはこのCLI検査だけを指す。
+- 新release SHA-256: `ba3e3fe9363604418574f0d5b5e953fa19c032ef1b70eee3dc23ba5672d2852a`。
+- 新試験base: `/private/tmp/local-mcp-chat-acceptance-kycr96pw`。
+- Session: `chat-uat-871d25ac2318427f`、runtime: `cbbf5033-d7cf-409b-8543-fb10584a5207`。
+- 新規PNG: 4368 bytes、SHA-256 `78e6d1e2e43442d8a347ee2d27fd8e4b9749ac4ac54769dd599c9394a5a4b7e3`。
+
+本人Keychain確認後にTunnel readyz=200。旧10/修正新9のschemaと本番hashをsnapshotし、管理UIで新9へ一時更新。通常Chatを再読込した最初の依頼はplugin未有効と報告されツール未実施。既存local-workspaceを明示添付して再開すると、新9列挙とsession_infoのcwd/runtime一致が成功した。
+
+view_imageを1回呼び、同一JavaScript実行内で画像出力まで成功。通常Chatが観測した返却構造:
+
+```text
+keys = [content, content_items]
+content = string, length 236
+content_items = array, length 2
+item[0] = text, keys [type, text]
+item[1] = image, keys [type, mimeType, data]
+image output = success
+receipt session_id/runtime_id present and match = true
+```
+
+正解を伏せた視覚回答は5図形: 左上=オレンジ上向き三角形、上中央=青円、右上=緑正方形、左下寄り=赤円、下中央〜右寄り=紫正方形。回答後に親タスクだけが正解manifestを初めて読み、全5件の色・形・相対位置と総数の一致を確認した。正解をChatへ送らず、OCR・コード解析・別ファイル参照・コマンド実行・画像データ文字列の表示保存はさせていない。
+
+修正版新view_imageの通常Chat視覚受入は合格。試験owner/Tunnelはsupervisor exec54165へstatusで照合後stopを送りowner exit0。旧10復元用に既存start-local.commandを同じprojectで起動（exec78097、session `ef22b888-f28e-4842-8bb6-ada24bd9de14`）。本人Keychain確認後readyz=200、管理UIで旧10を再取得し、通常Chatで復元確認中。
+
+復元後、通常Chatで旧10ツールを列挙し、新view_image等が無いことを確認。復元用session_infoを1回だけ呼びcwd一致を取得した。exec78097の読取履歴と起動scriptの親子関係を照合後Ctrl-Cでexit130。新旧の試験owner/Tunnel/facadeはすべて消失し、既存GBrain Tunnel PID32053のみ残る。GBrain readyz=200、本番5ファイルのhash不変、新診断領域local-mcp-runtime-hXyGZ7不存在、実機試験reportのソースhashと現ソースの一致を確認した。共有定義は旧10へ復元済み、権限設定は低リスクの操作を許可のまま。修正はworktree内だけで、本番配置・pushはしていない。

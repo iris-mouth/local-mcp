@@ -16,6 +16,7 @@ fn parse<T: DeserializeOwned>(args: Value) -> Result<T> {
     Ok(serde_json::from_value(args)?)
 }
 pub async fn dispatch(jobs: Arc<Jobs>, call: ToolCall) -> CallToolResult {
+    let image_response = call.name == "view_image";
     let identifiers = call.arguments.clone();
     let mut result = dispatch_inner(jobs, call).await;
     if let Some(Value::Object(payload)) = &mut result.structured_content {
@@ -28,6 +29,11 @@ pub async fn dispatch(jobs: Arc<Jobs>, call: ToolCall) -> CallToolResult {
         }
         result.content[0] =
             rmcp::model::ContentBlock::text(serde_json::to_string(payload).unwrap());
+    }
+    // Some hosts expose structuredContent alone and discard sibling image blocks.
+    // Keep the scoped JSON receipt in content, alongside the native image.
+    if image_response && result.is_error != Some(true) {
+        result.structured_content = None;
     }
     result
 }

@@ -138,6 +138,86 @@ impl McpClient {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn image_wire_keeps_pixels_and_scoped_receipt_without_structured_output() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let owner = Owner::start(4).await;
+    let encoded = "UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA";
+    std::fs::write(
+        owner._directory.path().join("pixel.webp"),
+        STANDARD.decode(encoded).unwrap(),
+    )
+    .unwrap();
+    let mut client = McpClient::start(&owner.session).await;
+    let runtime = client.runtime().await;
+    client
+        .send(json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}))
+        .await;
+    let catalog = client.receive().await;
+    let tools = catalog["result"]["tools"].as_array().unwrap();
+    let image_tool = tools.iter().find(|t| t["name"] == "view_image").unwrap();
+    assert!(image_tool.get("outputSchema").is_none());
+    assert!(
+        tools
+            .iter()
+            .filter(|t| t["name"] != "view_image")
+            .all(|t| t.get("outputSchema").is_some())
+    );
+    client
+        .call(
+            3,
+            "view_image",
+            json!({"runtime_id":runtime,"path":"pixel.webp"}),
+        )
+        .await;
+    let response = client.receive().await;
+    assert!(response.get("error").is_none());
+    let result = &response["result"];
+    assert!(result.get("structuredContent").is_none());
+    assert_ne!(result["isError"], true);
+    let content = result["content"].as_array().unwrap();
+    let receipt: Value = serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(receipt["session_id"], owner.session);
+    assert_eq!(receipt["runtime_id"], runtime);
+    assert_eq!(receipt["ok"], true);
+    assert_eq!(receipt["schema_version"], 1);
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(content[1]["mimeType"], "image/webp");
+    assert_eq!(content[1]["data"], encoded);
+    client
+        .call(
+            4,
+            "view_image",
+            json!({"runtime_id":"old-runtime","path":"pixel.webp"}),
+        )
+        .await;
+    let rejected = client.receive().await;
+    assert_eq!(rejected["result"]["isError"], true);
+    assert!(
+        !rejected["result"]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["type"] == "image")
+    );
+    client
+        .call(
+            5,
+            "view_image",
+            json!({"runtime_id":runtime,"path":"missing.webp"}),
+        )
+        .await;
+    let missing = client.receive().await;
+    assert_eq!(missing["result"]["isError"], true);
+    assert_eq!(
+        missing["result"]["structuredContent"]["error"]["code"],
+        "image_failed"
+    );
+    drop(client);
+    owner.shutdown().await;
+}
+
 #[tokio::test]
 async fn one_owner_rpc_slot_keeps_control_available_during_exec_wait() {
     let owner = Owner::start(1).await;

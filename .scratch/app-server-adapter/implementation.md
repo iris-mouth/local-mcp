@@ -84,11 +84,12 @@ release版の大出力試験で記録したピークRSS（KiB）:
 
 後続の[画像診断](image-diagnosis.md)では旧get_imageのcontent_itemsを画像出力helperへ渡して盲検認識に成功した。しかし新view_imageの再試験では、通常ChatへstructuredContentと同じメタデータのみが公開され、content/content_itemsが無いため視覚受入は引き続き未達。新旧の結果を区別する。
 
+その後、成功したview_imageだけstructuredContent/outputSchemaを使わず、識別子付きJSON textとnative imageを返す互換修正を行った。全17テスト・clippy・[実機66項目](image-fix-acceptance-results.json)成功後、通常Chatで修正版の新9ツールを実利用。content_items=[text,image]から画像出力し、未見5図形の色・形・相対位置を正しく回答できた。本人許可による正解manifest事後照合も全件一致し、修正版の画像視覚受入は合格。詳しい証拠と復元状況は画像診断末尾を参照。
+
 本人許可による共有plugin catalogの一時更新は旧10ツールへ復元し、新旧のテスト接続をすべて終了した。本番binary/profile/helperは不変で、既存GBrainの稼働を確認した。
 
 ## 未完了の受入・範囲
 
-- 通常Chatが未見の図柄を説明できる画像視覚受入。今回のnative MCP image配送・デコード成功を、この受入へ読み替えない。
 - 今回と異なるChat権限モード、hostでの本人の操作拒否を含む確認設定の受入。今回のテスト操作者による一度だけ許可を、本人の手動クリック証明とは扱わない。
 - 通常Chat/Tunnel経路での実際の最大配送量と、長期間・多数RPC並行での資源設定調整。
 - 公式診断の異常終了後の残留を、運用として確認・回収する受入。実装は異常時に推測削除せず場所を表示する。

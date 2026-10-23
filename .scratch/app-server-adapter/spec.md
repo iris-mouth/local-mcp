@@ -220,7 +220,10 @@ streamingと`disableOutputCap`により既存のsource出力を維持し、ア�
 ### 結果・エラー・出力
 
 - MCPのstructuredContentをモデル向けの正規結果とし、text contentにも識別子・状態・重要な結果を読める形で返す。
-  image contentは別contentとして付ける。App Serverのraw RPC、内部診断、接続キーを結果に混ぜない。
+  例外として成功したview_imageはstructuredContentとoutputSchemaを使わず、識別子付きJSON textとnative imageをcontentへ返す。
+  通常ChatがstructuredContentだけを公開して画像contentを落とす挙動への互換対応であり、画像エラーと他ツールの構造化結果は維持する。
+  hostがcontent_itemsへ画像を配置する場合は画像出力helperへ渡し、実際の視覚認識で検証する。
+  App Serverのraw RPC、内部診断、接続キーを結果に混ぜない。
 - 結果にはschema_version、ok、適用できるsession/runtime/job/request識別子、状態・終了code・出力情報を含める。
   コマンドの非ゼロexitはokなツール実行の終了結果であり、副作用がなかったことを意味しない。
 - 引数不正、認可拒否、ID不一致、容量超過、未対応能力、読取失敗、基盤利用不能は安定したtool errorとして返す。

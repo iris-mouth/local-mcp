@@ -40,13 +40,18 @@ def tool(session, name, **arguments):
         response=read_json(p)
         if 'error' in response:raise AssertionError(response)
         result=response['result']
-        assert 'structuredContent' in result,result
+        if name=='view_image' and result.get('isError') is not True:
+            assert 'structuredContent' not in result,result.keys()
+        else:
+            assert 'structuredContent' in result,result
         return result
     finally:
         p.stdin.close()
         try:p.wait(timeout=5)
         except subprocess.TimeoutExpired:p.terminate();p.wait(timeout=5)
-def data(result):return result['structuredContent']
+def data(result):
+    if 'structuredContent' in result:return result['structuredContent']
+    return json.loads(next(c['text'] for c in result['content'] if c['type']=='text'))
 def wait(session,runtime,job):
     deadline=time.monotonic()+15
     while time.monotonic()<deadline:

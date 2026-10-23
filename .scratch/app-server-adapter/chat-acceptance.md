@@ -1,7 +1,9 @@
 # 通常Chat受け入れテスト
 
 Date: 2026-10-23 (Asia/Tokyo)
-Status: completed with image visual acceptance unmet; legacy 10-tool catalog restored; all test connections stopped
+Status: completed including fixed view_image blind visual acceptance; legacy 10-tool catalog restored; all test connections stopped
+
+Latest follow-up: 修正版view_imageを新9ツールとして通常Chatで検証し、content_items=[text,image]から画像出力が成功。未見の5図形すべての色・形・相対位置が、回答後に読んだ正解manifestと一致した。修正版の視覚受入は合格。詳細と最新の復元状態は[画像診断記録](image-diagnosis.md)末尾を参照。以下の未達記録は修正前の履歴である。
 
 Follow-up: 旧get_imageの画像はcontent_items[0]に保持され、画像出力helperへ渡すと未見の5図形を認識でき、本人許可後の正解照合で全件一致した。旧画像経路の視覚受入は合格。一方、新view_imageへcatalogを一時更新した再試験では、通常ChatへstructuredContentと同じメタデータだけが公開され、content/content_itemsが無く視覚受入は未達。詳細と復元状況は[画像診断記録](image-diagnosis.md)を参照。以下は元の受入時点の記録を保持する。
 
