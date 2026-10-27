@@ -1,3 +1,6 @@
+#[cfg(not(unix))]
+use local_mcp::protocol::Access;
+#[cfg(unix)]
 use local_mcp::{
     app_server::AppServer,
     config::{Session, Settings},
@@ -6,9 +9,13 @@ use local_mcp::{
     mcp,
     protocol::*,
 };
-use serde_json::{Value, json};
+#[cfg(unix)]
+use serde_json::Value;
+use serde_json::json;
+#[cfg(unix)]
 use std::{path::Path, sync::Arc};
 
+#[cfg(unix)]
 async fn setup(mut settings: Settings) -> (tempfile::TempDir, Arc<Jobs>) {
     settings.rpc_timeout_ms = 80;
     let dir = tempfile::tempdir().unwrap();
@@ -19,6 +26,7 @@ async fn setup(mut settings: Settings) -> (tempfile::TempDir, Arc<Jobs>) {
     let (backend, events) = AppServer::spawn(&exe, &session).await.unwrap();
     (dir, Jobs::new(session, backend, events))
 }
+#[cfg(unix)]
 fn exec(j: &Jobs, request: &str, argv: &[&str]) -> ExecArgs {
     ExecArgs {
         session_id: j.session.id.clone(),
@@ -31,6 +39,7 @@ fn exec(j: &Jobs, request: &str, argv: &[&str]) -> ExecArgs {
         size: None,
     }
 }
+#[cfg(unix)]
 fn status(j: &Jobs, id: &str, cursor: Option<String>) -> StatusArgs {
     StatusArgs {
         session_id: j.session.id.clone(),
@@ -41,6 +50,7 @@ fn status(j: &Jobs, id: &str, cursor: Option<String>) -> StatusArgs {
         wait_ms: Some(0),
     }
 }
+#[cfg(unix)]
 async fn terminal(j: &Jobs, id: &str) -> Value {
     for _ in 0..100 {
         let v = j
@@ -55,6 +65,7 @@ async fn terminal(j: &Jobs, id: &str) -> Value {
     }
     panic!("job did not finish")
 }
+#[cfg(unix)]
 #[tokio::test]
 async fn dedup_retains_nonzero_exit_and_output_is_not_consumed() {
     let (_dir, j) = setup(Settings::default()).await;
@@ -81,6 +92,7 @@ async fn dedup_retains_nonzero_exit_and_output_is_not_consumed() {
     assert!(j.execute(changed, None, None).await.is_error.unwrap());
     assert!(j.shutdown().await);
 }
+#[cfg(unix)]
 #[tokio::test]
 async fn full_job_capacity_keeps_status_input_and_stop_working() {
     let settings = Settings {
@@ -140,6 +152,7 @@ async fn full_job_capacity_keeps_status_input_and_stop_working() {
     assert_eq!(terminal(&j, &id).await["exit_code"], 143);
     assert!(j.shutdown().await);
 }
+#[cfg(unix)]
 #[tokio::test]
 async fn lost_input_ack_blocks_further_delivery_but_keeps_observation() {
     let (_dir, j) = setup(Settings::default()).await;
@@ -180,6 +193,7 @@ async fn lost_input_ack_blocks_further_delivery_but_keeps_observation() {
     assert_eq!(v["input_delivery_unknown"], true);
     assert!(j.shutdown().await);
 }
+#[cfg(unix)]
 #[tokio::test]
 async fn output_gaps_expiry_and_receipt_capacity_preserve_known_exit() {
     let s = Settings {
@@ -228,6 +242,7 @@ async fn output_gaps_expiry_and_receipt_capacity_preserve_known_exit() {
     );
     assert!(j.shutdown().await);
 }
+#[cfg(unix)]
 #[tokio::test]
 async fn backend_loss_marks_unfinished_unknown_and_refuses_new_execution() {
     let (_dir, j) = setup(Settings::default()).await;
@@ -270,6 +285,7 @@ async fn backend_loss_marks_unfinished_unknown_and_refuses_new_execution() {
     );
     j.shutdown().await;
 }
+#[cfg(unix)]
 #[tokio::test]
 async fn roots_cwd_and_runtime_are_checked_before_dispatch() {
     let (dir, j) = setup(Settings::default()).await;
@@ -298,6 +314,7 @@ async fn roots_cwd_and_runtime_are_checked_before_dispatch() {
     }
     assert!(j.shutdown().await);
 }
+#[cfg(unix)]
 #[tokio::test]
 async fn read_preserves_crlf_outside_roots_and_schema_rejects_unknown_fields() {
     let (dir, j) = setup(Settings::default()).await;
@@ -328,6 +345,7 @@ async fn read_preserves_crlf_outside_roots_and_schema_rejects_unknown_fields() {
     assert!(j.shutdown().await);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn root_replacement_does_not_expand_authority_or_break_old_receipts() {
     let (dir, j) = setup(Settings::default()).await;
@@ -357,6 +375,7 @@ async fn root_replacement_does_not_expand_authority_or_break_old_receipts() {
     assert_eq!(rejected["error"]["code"], "authorization_denied");
     assert!(j.shutdown().await);
 }
+#[cfg(unix)]
 #[tokio::test]
 async fn known_exit_survives_incompatible_output_and_cursor_is_job_bound() {
     let (_dir, j) = setup(Settings::default()).await;
@@ -384,6 +403,7 @@ async fn known_exit_survives_incompatible_output_and_cursor_is_job_bound() {
     assert!(j.shutdown().await);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn output_unavailability_survives_subsequent_backend_loss() {
     for fault in ["base64", "missing", "stream"] {
@@ -407,6 +427,7 @@ async fn output_unavailability_survives_subsequent_backend_loss() {
     }
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn line_range_does_not_read_or_validate_the_following_line() {
     let (_dir, j) = setup(Settings::default()).await;
@@ -443,6 +464,7 @@ async fn line_range_does_not_read_or_validate_the_following_line() {
     assert!(j.shutdown().await);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn dedicated_diff_rejects_non_regular_target_modes() {
     let (_dir, j) = setup(Settings::default()).await;
@@ -481,7 +503,9 @@ async fn dedicated_diff_rejects_non_regular_target_modes() {
 }
 #[test]
 fn session_ids_and_socket_paths_preserve_existing_constraints() {
-    use local_mcp::config::{socket_path, validate_session_id};
+    #[cfg(unix)]
+    use local_mcp::config::socket_path;
+    use local_mcp::config::validate_session_id;
     for id in ["my-project_1.dev", "7418eda5-fd07-4e00-ace5-c1ece2f68a02"] {
         assert!(validate_session_id(id).is_ok());
     }
