@@ -36,7 +36,13 @@ LOCAL_MCP_TEST_BINARY=target/release/local-mcp python3 tests/real_app_server.py 
 
 初回の公式受入実行は試験中のソース変更を末尾のハッシュ検査で検出し、無効になった。最終ソースを固定した実行で66項目とハッシュ検査を通過し、上記JSONを生成した。既存接続試験は、新しい設定読込が実際の利用者HOMEへ触れないよう、重複起動を含む全connectを一時HOMEへ隔離した。
 
-## 未実施の範囲
+## 後続のCI・Release受入
+
+実装後にmainへのpush、両macOSアーキテクチャのCI、v0.1.0の配布物生成・ダウンロード・実Chat受入・公開まで実施した。最初のCIで見つかったlintコンポーネント不足とWindowsからのUnix fixture直接起動を修正し、全4ジョブが成功した。
+
+詳細は[Release受入・本番切替記録](release-validation.md)を参照。下記のうち、GitHub Actions、Intelのnative受入、実Chat/Tunnel/Keychain、本番runtime切替、Release公開はそこで完了している。
+
+## 初回実装検証時点の未実施範囲
 
 - GitHub Actions上での実行、Intelネイティブでの受入、draft Releaseの作成・公開は未実施。workflowを追加し、ローカルで構文とarm64の配布物生成を検証した。
 - 実Chat、実Tunnel、実Keychainでの新runtimeの疎通・画像受入は未実施。本番runtime・登録先・Keychain・既存の公式実行ファイルは変更していない。
