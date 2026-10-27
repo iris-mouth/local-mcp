@@ -58,12 +58,29 @@ impl Output {
 }
 #[derive(Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum State {
+pub(crate) enum State {
     Accepted,
     Running,
     StopRequested,
     Finished,
     Unknown,
+}
+pub(crate) struct JobSummary {
+    pub id: String,
+    pub state: State,
+    pub exit_code: Option<i64>,
+}
+
+impl State {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Accepted => "受付済み",
+            Self::Running => "実行中",
+            Self::StopRequested => "停止要求済み",
+            Self::Finished => "終了",
+            Self::Unknown => "不明",
+        }
+    }
 }
 struct Job {
     state: State,
@@ -120,6 +137,34 @@ enum Action {
     Input(String, Value),
 }
 impl Jobs {
+    pub(crate) fn close_admission(&self) {
+        self.store.lock().unwrap().closing = true;
+    }
+    pub(crate) fn summaries(&self) -> Vec<JobSummary> {
+        let store = self.store.lock().unwrap();
+        let mut jobs: Vec<_> = store
+            .jobs
+            .iter()
+            .map(|(id, job)| JobSummary {
+                id: id.clone(),
+                state: job.state,
+                exit_code: job.exit_code,
+            })
+            .collect();
+        jobs.sort_by(|a, b| a.id.cmp(&b.id));
+        jobs
+    }
+
+    /// Check idle and close admission atomically; a new command cannot slip
+    /// between an idle /quit check and shutdown without being confirmed.
+    pub(crate) fn close_if_idle(&self) -> bool {
+        let mut store = self.store.lock().unwrap();
+        if store.jobs.values().any(|job| job.state != State::Finished) {
+            return false;
+        }
+        store.closing = true;
+        true
+    }
     pub fn new(
         session: Session,
         backend: Arc<AppServer>,

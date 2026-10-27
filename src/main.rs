@@ -12,6 +12,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Set up a new runtime and save local preferences; does not start services.
+    #[cfg(unix)]
+    Setup {
+        #[arg(long)]
+        from_runtime: Option<PathBuf>,
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
     /// Prepare a new, independent runtime. Does not read keys or start services.
     #[cfg(unix)]
     Prepare {
@@ -64,11 +72,33 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    match Cli::parse().command.unwrap_or(Command::Start {
+    let command = Cli::parse().command;
+    #[cfg(unix)]
+    let command = match command {
+        Some(command) => command,
+        None => {
+            if local_mcp::preferences::load()?.runtime.is_none() {
+                local_mcp::connection::setup(None, None).await?;
+            }
+            Command::Connect {
+                project: None,
+                runtime: None,
+                config: None,
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let command = command.unwrap_or(Command::Start {
         session_id: None,
         config: None,
         codex: PathBuf::from("codex"),
-    }) {
+    });
+    match command {
+        #[cfg(unix)]
+        Command::Setup {
+            from_runtime,
+            config,
+        } => local_mcp::connection::setup(from_runtime, config).await,
         #[cfg(unix)]
         Command::Prepare {
             destination,
@@ -93,7 +123,7 @@ async fn main() -> Result<()> {
         } => {
             let settings = match config {
                 Some(path) => serde_json::from_slice(&std::fs::read(path)?)?,
-                None => Settings::default(),
+                None => local_mcp::preferences::load()?.settings,
             };
             local_mcp::connection::connect(project, runtime, settings).await
         }

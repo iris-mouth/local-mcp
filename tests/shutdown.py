@@ -75,7 +75,15 @@ def probe(mode):
                     job_pid = int(pid_file.read_text())
             # No delay: readiness must also mean that Ctrl-C can be handled.
             started = time.monotonic()
-            if mode.startswith('group'):
+            if mode == 'group-active':
+                # A real terminal now confirms a normal exit with active work.
+                os.killpg(owner.pid, signal.SIGINT)
+                deadline = time.monotonic()+5
+                while b'[y/N]' not in output and time.monotonic() < deadline:
+                    read_available(master, output, .1)
+                assert b'[y/N]' in output, output.decode(errors='replace')
+                os.write(master, b'y\n')
+            elif mode.startswith('group'):
                 os.killpg(owner.pid, signal.SIGINT)
             elif mode == 'owner':
                 os.kill(owner.pid, signal.SIGINT)

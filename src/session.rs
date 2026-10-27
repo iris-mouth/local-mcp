@@ -174,7 +174,7 @@ async fn start_inner(
         .keep();
     let session = config::Session::new(id, cwd, &directory, settings)?;
     eprintln!(
-        "local-mcp session: {}\nruntime: {}\ncwd: {}\nwrite roots: {:?}\nGit metadata candidates: {:?}\nexpanded ceiling: roots={:?}, network={}, full={}\ndiagnostics (may contain command bodies): {}\nmax_jobs: {}\nPress Ctrl-C or close stdin to stop. /status prints current state.",
+        "local-mcp session: {}\nruntime: {}\ncwd: {}\nwrite roots: {:?}\nGit metadata candidates: {:?}\nexpanded ceiling: roots={:?}, network={}, full={}\ndiagnostics (may contain command bodies): {}\nmax_jobs: {}\nTerminalを閉じると停止処理を行います。/help で操作一覧。",
         session.id,
         session.runtime_id,
         session.cwd.display(),
@@ -213,6 +213,12 @@ async fn start_inner(
         // The owner can still observe/stop existing work while connectivity is down.
         eprintln!("Tunnel startup failed: {error}; use /tunnel-restart after resolving it.");
     }
+    if connection.is_some()
+        && let Err(error) = crate::preferences::remember(&jobs.session.cwd)
+    {
+        eprintln!("最近のworkspaceを保存できませんでした（作業は継続）: {error}");
+    }
+    crate::cli::status(&jobs, connection.as_ref());
     eprintln!("Session ready: {}", jobs.session.id);
     let readers = Arc::new(tokio::sync::Semaphore::new(
         jobs.session.settings.max_rpc_inflight,
@@ -231,6 +237,12 @@ async fn start_inner(
         }
     });
     let mut tunnel_poll = tokio::time::interval(Duration::from_millis(250));
+    let mut health_poll = tokio::time::interval(Duration::from_secs(2));
+    let mut health_checks = tokio::task::JoinSet::new();
+    let mut controls = tokio::task::JoinSet::new();
+    let mut restarting = tokio::task::JoinSet::new();
+    let interactive = crate::cli::interactive();
+    let mut quit_pending = false;
     let result: Result<()> = loop {
         tokio::select! {
             _=tunnel_poll.tick(), if connection.is_some()=>{
@@ -238,19 +250,75 @@ async fn start_inner(
                     eprintln!("Tunnel supervision failed: {error}. Inspect connectivity with /status.");
                 }
             }
-            _=interrupt.recv()=>{break Ok(());}
+            _=health_poll.tick(), if health_checks.is_empty()=>{
+                if let Some((generation, path)) = connection.as_ref().and_then(|c| c.probe_target()) {
+                    health_checks.spawn(async move { (generation, crate::connection::probe_readiness(path).await) });
+                }
+            }
+            Some(probe)=health_checks.join_next(), if !health_checks.is_empty()=>{
+                if let Ok((generation, ready)) = probe && let Some(c) = connection.as_mut()
+                    && c.set_readiness(generation, ready) {
+                    crate::cli::status(&jobs, connection.as_ref());
+                }
+            }
+            Some(done)=controls.join_next(), if !controls.is_empty()=>{
+                if let Err(error) = done { eprintln!("CLI control failed: {error}"); }
+                crate::cli::status(&jobs, connection.as_ref());
+            }
+            Some(done)=restarting.join_next(), if !restarting.is_empty()=>{
+                match done {
+                    Ok((c, result)) => {
+                        connection = Some(c);
+                        if let Err(error) = result { eprintln!("Tunnel restart failed: {error}"); }
+                    }
+                    Err(error) => { eprintln!("Tunnel restart task failed: {error}"); }
+                }
+                crate::cli::status(&jobs, connection.as_ref());
+            }
+            _=interrupt.recv()=>{
+                if crate::cli::request_quit(&jobs, &mut quit_pending, interactive) { break Ok(()); }
+            }
             _=terminate.recv()=>{break Ok(());}
             _=hangup.recv()=>{break Ok(());}
             line=stdin.recv()=>{match line {
                 None=>break Ok(()),
-                Some(Ok(line)) if line.trim()=="/status"=>{
-                    eprintln!("{}",jobs.info().structured_content.unwrap());
-                    if let Some(connection)=&connection { connection.status(); }
+                Some(Ok(line))=>{
+                    if quit_pending {
+                        quit_pending = false;
+                        if matches!(line.trim(), "y" | "Y" | "yes") { break Ok(()); }
+                        eprintln!("終了を取り消しました。");
+                        crate::cli::status(&jobs, connection.as_ref());
+                        continue;
+                    }
+                    match crate::cli::control(&line) {
+                        crate::cli::Control::Help => eprintln!("{}", crate::cli::HELP),
+                        crate::cli::Control::Status => crate::cli::status(&jobs, connection.as_ref()),
+                        crate::cli::Control::Jobs => crate::cli::show_jobs(&jobs),
+                        crate::cli::Control::Stop(id) => {
+                            if controls.len() >= jobs.session.settings.max_rpc_inflight {
+                                eprintln!("CLI control capacity reached");
+                            } else {
+                                let args = StopArgs { session_id: jobs.session.id.clone(), runtime_id: jobs.session.runtime_id.clone(), job_id: id.to_owned() };
+                                let jobs = jobs.clone();
+                                controls.spawn(async move {
+                                    let id = args.job_id.clone();
+                                    crate::cli::stop_result(&id, jobs.stop(args).await);
+                                });
+                            }
+                        }
+                        crate::cli::Control::Restart => {
+                            if let Some(mut c) = connection.take() {
+                                let id = jobs.session.id.clone();
+                                restarting.spawn(async move { let result = c.restart(&id).await; (c, result) });
+                                eprintln!("Tunnel再接続中。作業セッションとジョブは継続します。");
+                            } else { eprintln!("Tunnelなし、または再接続中です。"); }
+                        }
+                        crate::cli::Control::Quit => {
+                            if crate::cli::request_quit(&jobs, &mut quit_pending, interactive) { break Ok(()); }
+                        }
+                        crate::cli::Control::Invalid => eprintln!("{}", crate::cli::HELP),
+                    }
                 },
-                Some(Ok(line)) if line.trim()=="/tunnel-restart" && connection.is_some()=>{
-                    if let Err(error)=connection.as_mut().unwrap().restart(&jobs.session.id).await { eprintln!("Tunnel restart failed: {error}"); }
-                },
-                Some(Ok(_))=>eprintln!("Use startup --config for trusted permission ceilings. /status or Ctrl-C."),
                 Some(Err(e))=>break Err(e.into())
             }}
             connection=async {
@@ -283,6 +351,15 @@ async fn start_inner(
             }
         }
     };
+    jobs.close_admission();
+    health_checks.abort_all();
+    controls.abort_all();
+    restarting.abort_all();
+    while let Some(done) = restarting.join_next().await {
+        if let Ok((c, _)) = done {
+            connection = Some(c);
+        }
+    }
     let tunnel_result = match &mut connection {
         Some(connection) => connection.stop().await,
         None => Ok(()),

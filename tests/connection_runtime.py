@@ -43,6 +43,8 @@ with tempfile.TemporaryDirectory(prefix="local-mcp runtime ' ") as directory:
     root = base/'runtime'
     project = base/'project'
     project.mkdir()
+    home = base/'home'
+    home.mkdir()
     client = base/'client-fixture'
     client.write_text('#!/bin/sh\nexit 0\n')
     client.chmod(0o700)
@@ -103,7 +105,7 @@ while True: time.sleep(.1)
         (root/'state/mode').write_text('run')
         log_path = base/f'{ending}.log'
         with log_path.open('w') as log:
-            owner = subprocess.Popen([str(BINARY), 'connect', str(project), '--runtime', str(root)],
+            owner = subprocess.Popen([str(BINARY), 'connect', str(project), '--runtime', str(root)], env={**os.environ, 'HOME':str(home)},
                                      stdin=subprocess.PIPE, stdout=log, stderr=log, start_new_session=True)
         session = None
         try:
@@ -124,8 +126,8 @@ while True: time.sleep(.1)
             wait_for(lambda: observed())
             if ending == 'interrupt':
                 job = call('exec_command', runtime_id=runtime_id, request_id='retained-job', argv=['hold'], wait_ms=0)
-                duplicate = subprocess.run([str(BINARY), 'connect', str(project), '--runtime', str(root)], capture_output=True, timeout=5)
-                assert duplicate.returncode != 0 and b'already owned' in duplicate.stderr
+                duplicate = subprocess.run([str(BINARY), 'connect', str(project), '--runtime', str(root)], env={**os.environ, 'HOME':str(home)}, capture_output=True, timeout=5)
+                assert duplicate.returncode != 0 and b'already owned' in duplicate.stderr, duplicate.stderr.decode(errors='replace')
                 (root/'state/mode').write_text('fail')
                 # Crash only the leader: surviving same-group children must be
                 # collected before retry, including ones that ignore SIGTERM.

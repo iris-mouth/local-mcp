@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -20,3 +20,12 @@ jobs:
         run: rustup show
       - name: Test
         run: cargo test --locked --all-targets
+      - name: Lint and CLI acceptance on macOS
+        if: runner.os == 'macOS'
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo build --locked
+          python3 tests/cli_ux.py
+          python3 tests/connection_runtime.py
+          python3 tests/shutdown.py

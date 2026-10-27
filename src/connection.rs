@@ -55,7 +55,7 @@ fn tunnel_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-fn executable(path: &Path) -> Result<PathBuf> {
+pub(crate) fn executable(path: &Path) -> Result<PathBuf> {
     let path = path
         .canonicalize()
         .with_context(|| format!("cannot resolve {}", path.display()))?;
@@ -194,6 +194,125 @@ pub fn prepare(
     Ok(())
 }
 
+/// Guided local configuration. The credential itself is never read here.
+pub async fn setup(from: Option<PathBuf>, config_file: Option<PathBuf>) -> Result<()> {
+    use crate::{app_server, cli, preferences};
+    ensure!(
+        cli::interactive(),
+        "setup requires a terminal; use prepare for explicit noninteractive deployment"
+    );
+    let prefs = preferences::load()?;
+    let previous_path = from.or(prefs.runtime);
+    let previous = previous_path.as_deref().map(load).transpose()?;
+    let mut settings = match config_file {
+        Some(path) => serde_json::from_slice::<Settings>(&fs::read(path)?)?,
+        None => prefs.settings,
+    };
+    settings.validate()?;
+    // Persist the selected directories, not paths whose meaning changes with
+    // the working directory of a future invocation.
+    for roots in [&mut settings.write_roots, &mut settings.extra_roots] {
+        for root in roots {
+            *root = config::canonical_directory(root)?;
+        }
+    }
+    eprintln!(
+        "公式バイナリの取得先:\n  https://github.com/openai/codex/releases\n  https://github.com/openai/tunnel-client/releases"
+    );
+    let id = cli::prompt(
+        "Tunnel ID（キーは入力しない）",
+        previous.as_ref().map(|r| r.tunnel_id.as_str()),
+    )?;
+    tunnel_id(&id)?;
+    // Hold the same lease as connect through preparation and activation.
+    let _lease = lease(&id)?;
+    let codex = cli::executable(
+        "公式Codexの実行ファイル",
+        "codex",
+        previous.as_ref().map(|r| r.codex.as_path()),
+    )?;
+    let old_client = previous_path
+        .as_ref()
+        .map(|p| p.join("client/tunnel-client"));
+    let client = cli::executable(
+        "公式Tunnel clientの実行ファイル",
+        "tunnel-client",
+        old_client.as_deref(),
+    )?;
+    let service = cli::prompt(
+        "Keychain service",
+        Some(
+            previous
+                .as_ref()
+                .map(|r| r.keychain_service.as_str())
+                .unwrap_or("chatgpt-mcp-tunnel"),
+        ),
+    )?;
+    let default_account = std::env::var("USER").ok();
+    let account = cli::prompt(
+        "Keychain account",
+        previous
+            .as_ref()
+            .map(|r| r.keychain_account.as_str())
+            .or(default_account.as_deref()),
+    )?;
+    let default_destination = PathBuf::from(std::env::var_os("HOME").context("HOME required")?)
+        .join(format!(
+            "local-mcp-{}-{}",
+            env!("CARGO_PKG_VERSION"),
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        ));
+    let destination = cli::path(&cli::prompt(
+        "新しい配置先（既存ディレクトリは不可）",
+        default_destination.to_str(),
+    )?);
+    // Check the official command contract without starting a model or reading auth.
+    let check = tempfile::tempdir()?;
+    let session = config::Session::new(
+        uuid::Uuid::new_v4().to_string(),
+        check.path().to_owned(),
+        check.path(),
+        Settings::default(),
+    )?;
+    app_server::check_capabilities(&codex, &session).await?;
+    prepare(
+        destination.clone(),
+        id,
+        client,
+        codex,
+        service,
+        Some(account),
+    )?;
+    let destination = destination.canonicalize()?;
+    let status = tokio::process::Command::new(destination.join("client/tunnel-client"))
+        .args(["doctor", "--profile", "local-mcp", "--profile-dir"])
+        .arg(destination.join("profiles"))
+        .env_clear()
+        .envs(config::safe_environment())
+        .env(
+            "CONTROL_PLANE_API_KEY",
+            "sk-local-mcp-doctor-placeholder-not-a-credential",
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .status();
+    ensure!(
+        tokio::time::timeout(Duration::from_secs(30), status)
+            .await??
+            .success(),
+        "Tunnel client doctor failed; existing default unchanged. Inspect prepared files at {}",
+        destination.display()
+    );
+    preferences::activate(destination.clone(), settings)?;
+    eprintln!(
+        "設定済み: {}\nKeychain Accessで上記service/accountの汎用パスワードを用意してください。キーはChatやCLIへ入力しないでください。\nChatGPTの接続登録手順: https://developers.openai.com/api/docs/guides/secure-mcp-tunnels\nsetupは接続を開始していません。local-mcpで作業先を選んで開始できます。",
+        destination.display()
+    );
+    Ok(())
+}
+
 fn load(root: &Path) -> Result<Runtime> {
     let runtime: Runtime = serde_json::from_slice(&fs::read(root.join("runtime.json"))?)?;
     ensure!(runtime.version == 1, "unsupported runtime version");
@@ -249,7 +368,8 @@ pub async fn connect(
     root: Option<PathBuf>,
     settings: Settings,
 ) -> Result<()> {
-    let root = match root {
+    let preferences = crate::preferences::load()?;
+    let root = match root.or(preferences.runtime) {
         Some(root) => root,
         None => std::env::current_exe()?
             .parent()
@@ -261,14 +381,7 @@ pub async fn connect(
     let runtime = load(&root)?;
     let project = match project {
         Some(project) => project,
-        None => {
-            eprint!("作業するプロジェクトの絶対パス: ");
-            std::io::stderr().flush()?;
-            let mut text = String::new();
-            std::io::stdin().read_line(&mut text)?;
-            ensure!(!text.trim().is_empty(), "project required");
-            PathBuf::from(text.trim())
-        }
+        None => crate::cli::choose_workspace(&preferences.recent_workspaces)?,
     };
     let project = config::canonical_directory(&project)?;
     let guard = lease(&runtime.tunnel_id)?;
@@ -278,6 +391,8 @@ pub async fn connect(
         retry_at: None,
         restarts: 0,
         state: "not started",
+        ready: false,
+        generation: 0,
         _guard: guard,
     };
     session::start_connected(None, settings, runtime.codex, project, connection).await
@@ -336,7 +451,24 @@ pub struct Connection {
     retry_at: Option<Instant>,
     restarts: u32,
     state: &'static str,
+    ready: bool,
+    generation: u64,
     _guard: File,
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        // Restart owns this value in a cancellable task. Reap its known child
+        // before releasing the Tunnel lease, including on task cancellation.
+        drop(self.child.take());
+        for file in ["state/health.url", "state/tunnel.pid"] {
+            if let Err(error) = fs::remove_file(self.root.join(file))
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                eprintln!("Tunnel state cleanup was not confirmed: {error}");
+            }
+        }
+    }
 }
 
 /// The unreaped leader reserves the process-group ID until all group signals
@@ -506,6 +638,8 @@ impl Drop for OwnedTunnel {
 
 impl Connection {
     pub fn start(&mut self, id: &str) -> Result<()> {
+        self.ready = false;
+        self.generation += 1;
         for file in ["state/health.url", "state/tunnel.pid"] {
             match fs::remove_file(self.root.join(file)) {
                 Ok(()) => (),
@@ -540,7 +674,7 @@ impl Connection {
                     .context("cannot start Tunnel credential helper")?,
             ),
         });
-        self.state = "client started (remote readiness not confirmed)";
+        self.state = "client started";
         self.retry_at = None;
         eprintln!(
             "Tunnel client started. Health URL file: {}. Log: {}",
@@ -552,9 +686,30 @@ impl Connection {
 
     pub fn status(&self) {
         eprintln!(
-            "Tunnel: {}; automatic restarts: {}/3",
-            self.state, self.restarts
+            "Tunnel: {}; automatic restarts: {}/3; {}",
+            self.state,
+            self.restarts,
+            if self.ready {
+                "接続準備完了（Chatからの疎通は未確認）"
+            } else {
+                "接続準備未完了。/status または /tunnel-restart"
+            }
         );
+    }
+
+    pub fn probe_target(&self) -> Option<(u64, PathBuf)> {
+        self.child
+            .as_ref()
+            .map(|_| (self.generation, self.root.join("state/health.url")))
+    }
+
+    pub fn set_readiness(&mut self, generation: u64, ready: bool) -> bool {
+        if generation != self.generation || self.child.is_none() {
+            return false;
+        }
+        let changed = self.ready != ready;
+        self.ready = ready;
+        changed
     }
 
     pub fn tick(&mut self, id: &str) -> Result<()> {
@@ -562,6 +717,8 @@ impl Connection {
             && let Some(status) = child.poll_exit()?
         {
             self.child = None;
+            self.ready = false;
+            self.generation += 1;
             self.state = "stopped";
             if status.code() == Some(78) {
                 eprintln!(
@@ -591,6 +748,8 @@ impl Connection {
     }
 
     pub async fn stop(&mut self) -> Result<()> {
+        self.ready = false;
+        self.generation += 1;
         self.retry_at = None;
         if let Some(mut child) = self.child.take() {
             child.stop().await?;
@@ -609,9 +768,76 @@ impl Connection {
     }
 }
 
+/// Only the loopback HTTP status is inspected. Never follow redirects or read an
+/// unbounded file/response, and never equate readiness with a Chat tool call.
+pub async fn probe_readiness(path: PathBuf) -> bool {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    let probe = async {
+        let file = tokio::fs::File::open(path).await?;
+        let mut url = String::new();
+        file.take(513).read_to_string(&mut url).await?;
+        ensure!(url.len() <= 512, "health URL too large");
+        let authority = url
+            .trim()
+            .strip_prefix("http://")
+            .context("HTTP required")?
+            .trim_end_matches('/');
+        let addr: std::net::SocketAddr = authority.parse()?;
+        ensure!(
+            addr.ip().is_loopback() && addr.port() != 0,
+            "loopback health required"
+        );
+        let mut socket = tokio::net::TcpStream::connect(addr).await?;
+        socket
+            .write_all(
+                format!("GET /readyz HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .await?;
+        let mut status = Vec::new();
+        BufReader::new(socket)
+            .take(8192)
+            .read_until(b'\n', &mut status)
+            .await?;
+        ensure!(
+            status.ends_with(b"\r\n") && status.len() < 8192,
+            "invalid HTTP status"
+        );
+        let line = std::str::from_utf8(&status)?;
+        let mut parts = line.split_ascii_whitespace();
+        ensure!(
+            matches!(parts.next(), Some("HTTP/1.0" | "HTTP/1.1")),
+            "invalid HTTP version"
+        );
+        Ok::<_, anyhow::Error>(parts.next() == Some("200"))
+    };
+    matches!(
+        tokio::time::timeout(Duration::from_secs(1), probe).await,
+        Ok(Ok(true))
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn readiness_rejects_non_loopback_and_unbounded_urls() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("health.url");
+        assert!(!probe_readiness(path.clone()).await);
+        for value in [
+            "https://127.0.0.1:1",
+            "http://example.invalid:80",
+            "http://192.0.2.1:80",
+            "http://127.0.0.1:0",
+            "http://user@127.0.0.1:80",
+            &"x".repeat(513),
+        ] {
+            fs::write(&path, value).unwrap();
+            assert!(!probe_readiness(path.clone()).await);
+        }
+    }
 
     #[test]
     fn facade_command_removes_keys_and_preserves_session_with_quoted_path() {
@@ -687,6 +913,8 @@ mod tests {
             retry_at: None,
             restarts: 0,
             state: "not started",
+            ready: false,
+            generation: 0,
             _guard: lease(&id).unwrap(),
         };
         (directory, connection, id)

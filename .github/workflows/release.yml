@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup show
+      - name: Validate tag and target
+        run: |
+          cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,os,sys; p=json.load(sys.stdin)["packages"][0]; assert os.environ["RELEASE_TAG"] == "v"+p["version"], "tag and Cargo version differ"'
+          rustc -vV | python3 -c 'import os,sys; assert "host: "+os.environ["RELEASE_TARGET"] in sys.stdin.read()'
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --all-targets
+      - run: cargo build --locked --release
+      - name: Test packaged executable
+        env:
+          LOCAL_MCP_TEST_BINARY: target/release/local-mcp
+        run: |
+          python3 tests/cli_ux.py
+          python3 tests/connection_runtime.py
+          python3 tests/shutdown.py
+      - name: Package
+        run: |
+          name="local-mcp-${RELEASE_TAG}-${RELEASE_TARGET}"
+          mkdir -p "dist/$name"
+          cp target/release/local-mcp README.md LICENSE "dist/$name/"
+          tar -czf "dist/$name.tar.gz" -C dist "$name"
+          mkdir smoke
+          tar -xzf "dist/$name.tar.gz" -C smoke
+          "smoke/$name/local-mcp" --help
+          cd dist
+          shasum -a 256 "$name.tar.gz" > "$name.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+  draft:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Create draft release
+        run: |
+          cd dist
+          cat ./*.sha256 > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          gh release create "$RELEASE_TAG" ./*.tar.gz SHA256SUMS --verify-tag --draft --generate-notes

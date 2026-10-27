@@ -5,10 +5,122 @@ makes the decisions; local-mcp uses the public `command/exec` protocol without
 starting a Codex model, thread, or turn. Its Rust CLI also prepares an independent
 runtime and manages the official Tunnel client for a selected project.
 
-The required acceptance platform is macOS. This revision does not provide a
-qualified Linux/Windows deployment.
+The supported deployment is macOS, with one selected workspace per connection.
+Reads retain host-user access; write permissions keep the existing workspace and
+trusted-root limits. Linux/Windows deployment is not qualified.
 
-## Run
+## Download and first setup
+
+Download your CPU's archive and `SHA256SUMS` from this repository's GitHub Releases
+page: `aarch64-apple-darwin` for Apple Silicon or `x86_64-apple-darwin` for Intel.
+Verify the archive with `shasum -a 256`, extract it, and put it in your chosen
+location. Release archives contain local-mcp, this README and LICENSE. Rust and
+Python are not required on the deployed path. The initial releases are unsigned
+and not notarized; macOS may require its normal first-open approval.
+
+Separately obtain an official [Codex executable](https://github.com/openai/codex/releases)
+with the required command capabilities and the official
+[Tunnel client](https://github.com/openai/tunnel-client/releases). local-mcp never
+downloads or updates these dependencies. Run the downloaded local-mcp:
+
+```sh
+./local-mcp setup
+./local-mcp
+```
+
+Setup asks for the Tunnel ID, executable locations, Keychain service/account and
+a **new** runtime directory. PATH candidates are offered for explicit selection.
+It validates Codex's generated command schemas and runs the client's local
+`doctor` with a placeholder credential. It neither reads a real key nor starts a
+connection. Keep a prepared runtime at its absolute path.
+
+Create or reuse a generic password in macOS Keychain Access: the item name/service
+defaults to `chatgpt-mcp-tunnel`, the account defaults to your local username, and
+the password is the Tunnel runtime key. Never enter that key in Chat, CLI arguments
+or a settings file. Complete the
+[official Tunnel and ChatGPT registration steps](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+for the same Tunnel ID and ChatGPT workspace. Actual credential access occurs only
+when the separate credential helper starts the client; macOS may ask for access.
+Setup/doctor success does not establish account authorization or Chat connectivity.
+
+An argument-free first launch runs setup and then workspace selection. Subsequent
+launches use the saved runtime and let you choose a recent workspace by number or
+enter a path (`~/` is supported). A workspace is never selected automatically.
+For noninteractive use, specify the project explicitly:
+
+```sh
+./local-mcp connect /absolute/project/path
+```
+
+## Daily controls
+
+Keep the Terminal open for the lifetime of the work session. Workspace switching
+means ending the session and starting another one.
+
+| Input | Action |
+| --- | --- |
+| `/help` | List controls |
+| `/status` | Workspace, backend, unfinished/unknown jobs, Tunnel readiness |
+| `/jobs` | Job IDs, distinct states and known exit codes |
+| `/stop JOB_ID` | Request one job's stop using its complete ID; inspect `/jobs` for actual exit |
+| `/tunnel-restart` | Reconnect while preserving the original session and jobs |
+| `/quit` | Shut down the session and its owned processes |
+
+Commands are local controls, never shell input. Status lines appear at startup,
+readiness changes and after controls. Client startup, loopback `/readyz` success,
+and a successful tool call from Chat are separate checkpoints. During connection
+recovery you can still observe and stop the original jobs. After connecting, ask
+Chat to check `session_info` and confirm the selected workspace before doing work.
+
+In a terminal, `/quit` or Ctrl-C with unfinished or unknown jobs asks `[y/N]`.
+Enter `y` to proceed, or Enter/`n` to continue work. A second Ctrl-C during this
+confirmation requests shutdown immediately. EOF, TERM, HUP and noninteractive
+SIGINT also request shutdown without a prompt. Closing the Terminal therefore
+ends the session. Stop acceptance does not prove process exit; unconfirmed
+shutdown reports retained diagnostics. SIGKILL/power loss cannot run cleanup.
+Jobs and output are not restored after restart and commands are never replayed.
+
+## Saved settings and updates
+
+`~/Library/Application Support/local-mcp/preferences.json` stores the default
+runtime, trusted Settings and at most ten recent workspace paths. Its directory
+is private (0700), the file is private (0600), and writes use a lock and atomic
+replacement. It contains no credentials, command bodies or job output. Invalid,
+unsupported or insecure preferences stop startup; repair the reported file rather
+than silently reverting to weaker settings. A failed recent-list write warns but
+does not interrupt an already-started session.
+
+`setup --config settings.json` imports trusted Settings for future connections.
+`connect --config settings.json` overrides them for just that launch. Otherwise
+connect uses saved Settings or the original defaults. Explicit `start` retains
+its original `--config`/defaults behavior. Runtime selection uses `--runtime`,
+then the saved default, then the legacy executable-relative runtime directory.
+
+To update, end the old work session and run the **newly downloaded executable**:
+
+```sh
+./local-mcp setup --from-runtime /absolute/old/runtime
+```
+
+Accept or change the offered settings and choose a new, nonexistent destination.
+The Tunnel ID, dependency locations and Keychain references are reused; saved
+Settings and recent workspace paths are preserved. Imported root paths are
+resolved when saved, so changing the launch directory cannot change their meaning.
+The same Tunnel's running
+connection blocks activation. The default changes only after preparation and
+checks succeed. Failed setup leaves the old default unchanged and may leave the
+new directory for inspection. Keep the old runtime for rollback; explicitly run
+its launcher or `connect --runtime /absolute/old/runtime` with its original
+trusted settings. Running the new executable's setup again from an old runtime
+prepares a fresh configuration without deleting either version.
+No active files are replaced and no old runtime is deleted automatically.
+
+The release workflow builds and tests both architectures natively, checks that
+the `v*` tag matches Cargo's version, and creates a **draft** GitHub Release.
+Review and publishing of that draft are separate operations. Nothing is published
+or deployed merely by changing this repository's source files.
+
+## Explicit runtime preparation
 
 To prepare the Tunnel runtime in a **new directory**, use:
 
@@ -37,15 +149,15 @@ Start work with `start-local.command /absolute/project/path`, or:
   --runtime /new/runtime/directory
 ```
 
-Omit the project to enter it interactively. Pass `connect --config settings.json`
+Omit the project to select it interactively. Pass `connect --config settings.json`
 for the same trusted execution ceilings as `start --config`. App Server must
 initialize successfully before the Tunnel starts. Client startup does **not**
-prove remote readiness; inspect the printed health URL file and `/readyz`.
+prove remote readiness; the CLI probes the printed health URL's `/readyz`.
 `/status` reports the session and client state. `/tunnel-restart` restarts only
 connectivity while preserving the original session, App Server, jobs and receipts.
 Unexpected client exit permits at most three restarts, after 1, 2 and 4 seconds.
-Credential/startup failures await manual intervention. Ctrl-C, stdin EOF, TERM or
-HUP stop the owned client and the session. The same Tunnel ID is exclusive among
+Credential/startup failures await manual intervention. Shutdown controls above
+stop the owned client and the session. The same Tunnel ID is exclusive among
 new local-mcp launchers; old chatgpt-mcp launchers do not participate in this lock
 and must be stopped before switching.
 
@@ -79,7 +191,8 @@ restarts, automatic command replay, or additional daemon/connection path.
 that session. Every tool requires `session_id`. Call `session_info` first and
 include its `runtime_id` in later calls. Old runtime identifiers are rejected.
 
-Ctrl-C or closing start's stdin requests shutdown. `/status` prints state.
+Ctrl-C or closing start's stdin requests shutdown with the terminal confirmation
+rules above. `/status` prints state.
 Duplicate starts cannot replace an existing socket/lock. Following a crash,
 inspect the previous owner before manually removing its stale socket and lock
 from the printed per-user socket directory. No PID guessing or automatic
@@ -204,6 +317,10 @@ that every official diagnostic store excludes command text.
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
+python3 tests/cli_ux.py
+python3 tests/connection_runtime.py
+python3 tests/shutdown.py
+cargo build --locked --release
 LOCAL_MCP_TEST_BINARY=target/release/local-mcp python3 tests/real_app_server.py /absolute/path/to/codex
 ```
 
