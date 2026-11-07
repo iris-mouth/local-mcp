@@ -37,8 +37,24 @@
 - 検証・配置済みバイナリSHA256: `73a524df6b45f9b789cc3d805ee9eeb5e4fb065ca318f3f5373298708c850f13`。最終の実App Server受入と一致した。選択した公式CodexのSHA256も受入時と一致した。
 - 旧`~/.local/share/local-mcp-v0.1.0`は変更せず復旧用に保持した。切替直前に旧Sessionのジョブ0件を再確認し、同じowner/socketを照合してSIGINTで終了。所有プロセス・socket・診断領域・Tunnel状態ファイルが回収された。別親のプロセスなので旧ownerの終了コード自体は取得していない。
 - サポート済みのsetupで、元のTunnel・client・公式Codex・Keychain参照を引き継ぎ、新規runtimeの生成と既定化を実施した。設定ファイルは0600で、元の固定認可上限と最近の作業先を維持。追加設定は検索用の絶対パスで、編集metadataは新しい既定1MiBとした。
-- 新launcherでこのリポジトリのSessionとApp Serverを起動できた。実Tunnelは既存KeychainのmacOSアクセス確認で待機中で、本人へMac側での確認を依頼した。実疎通と共有ツール定義の再取得は、この確認が完了してから検証する。
-- macOSの確認を担当するSecurityAgentと、同じ新runtime配下のcredential helperを親とするsecurityプロセスを確認した。コンピューター操作ツールはSecurityAgentへのアクセスを拒否したため、OS側の本人操作を待つ。キーを別経路で取得したり、既存の参照や権限を変更して回避したりしていない。
+- 新launcherでこのリポジトリのSessionとApp Serverを起動した。初回の既存Keychainへのアクセス確認はMac側の本人操作へ引き継ぎ、本人の「Mac側で許可しました」後に実接続の検証を完了した。
+
+### 実接続と公開定義の確認
+
+| 対象 | 結果 |
+| --- | --- |
+| 新runtimeのhealth / ready | どちらもHTTP 200 |
+| 実Tunnel経由のsession_info | 作業先とruntimeが起動時の値に一致、backend利用可能 |
+| 実Tunnel経由のread_file | 試用ファイルの元本文と一致 |
+| 実Tunnel経由のapply_diff | 実Gitの適用をappliedと返し、実ファイルの変更を確認。同一request_idは元jobと編集結果を返し、再適用なし |
+| 実Tunnel経由のexec_command / command_status | printfの既知終了と、合計8byte予算による3ページの日本語・4byte文字の復元を確認 |
+| 本番と同じSessionのMCP facade | 新しい一覧・検索・ジョブ継続を含む6確認、7応答のschema検証が成功 |
+| ChatGPT側の公開定義 | 既存プラグインで「ツールを更新」を実行。公開一覧で書込5・読取7の計12とlist_files / list_jobs / search_filesを確認 |
+| 正常終了 | 未終了ジョブ0件で/quit、所有ownerはexit 0。owner/client/facade、socket、診断領域、health/PIDファイルの回収を確認 |
+
+この実行中のChatは以前の9ツールの定義を保持していたため、新3ツールの実呼出しは同じ本番SessionのMCP facadeで確認し、ChatGPT側の登録は公開一覧で別に確認した。新しい会話などで定義を再取得するまで、既存の会話では旧定義が見える場合がある。別の通常Chatモデルによる成功率比較は行っていない。
+
+試用接続は正常終了し、新runtimeは既定のまま次回起動待ち。次回は新runtimeの`start-local.command`を作業先付きで起動する。実接続の応答原本と12ツールの確認画像はローカルの非公開記録に保存した。
 
 ### 復旧
 

@@ -52,6 +52,7 @@ Rust 1.96.0 / Cargo 1.96.0を、無視対象の`target/model-tool-usability-buil
 | tests/connection_runtime.py（最終release） | PASS | 使い捨て接続設定・Tunnel fixture、有限retry、認証失敗、interrupt/EOF/終了時の子回収 |
 | tests/shutdown.py（最終release） | PASS | fixtureと公式Codexで初期化中断、EOF、owner/process group終了、診断領域の削除条件 |
 | tests/real_app_server.py（最終release） | PASS、77項目 | 実App ServerとmacOS sandboxの実際の挙動 |
+| 本番実Tunnel・同一SessionのMCP facade | PASS | 実読取・Git編集と再配送・Unicode出力、追加3ツールの実呼出し、ChatGPT公開一覧12ツール、正常終了と回収。詳細は切替記録 |
 | CI/Release YAMLとbash -n | PASS | CI 4本、Release 10本のrunスクリプトを構文確認 |
 
 Rust/IPC試験では、エラー本文への入力値の混入防止、8byteページの非消費継続、極小の既存設定でも既知状態を保持すること、control枠の維持、空ファイル・終端・長大行の読取、検索のliteral/regex・glob・ignore/hidden・空白/日本語path・非UTF-8本文・symlink非追跡、配送/frame上限・依存欠如・時間上限・終了時の検索プロセス回収、書換可能な検索実行ファイルの拒否を確認した。
@@ -71,5 +72,7 @@ Rust/IPC試験では、エラー本文への入力値の混入防止、8byteペ�
 通常Chatで同じモデル・ホストを使う成功率・往復回数・転送量の比較は未実施。引数説明や初期予算が最適であるとは主張しない。
 後続の[作業ブランチ・mainのCI](deployment.md)で、macOS arm64/Intel・Ubuntu・Windowsの全4ジョブが成功した。Linux/Windowsの配備・sandboxを認定する試験ではない。Nix buildは未実施。
 本番反映とpushは後続の明示指示で追加された作業であり、進行と結果は[切替記録](deployment.md)で追う。Releaseの新規公開は依頼されていない。
+
+後続の本番反映は完了した。本人のMac側のKeychain確認後、実Tunnel疎通・公開12ツールへの更新と試用・正常終了まで確認し、新runtimeを既定として保持した。
 
 チケットのStatusは既存のtriage語彙を維持し、実装の完了は`Resolution: implemented`とコメントで記録する。
