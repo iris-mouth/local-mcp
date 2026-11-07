@@ -337,6 +337,14 @@ async fn searches_use_literal_by_default_and_report_limits_and_failures() {
     assert_eq!(non_text["matches"], json!([]));
     assert_eq!(non_text["skipped_non_utf8"], 1);
     assert_eq!(non_text["partial"], true);
+    write(&j, "utf16.txt", b"\xff\xfen\0e\0e\0d\0l\0e\0\n\0");
+    let utf16 = call(
+        &j,
+        "search_files",
+        json!({"pattern":"needle","glob":"utf16.txt"}),
+    )
+    .await;
+    assert_eq!(utf16["matches"], json!([]));
     for (size, reason) in [(70000, "output_limit"), (2 * 1024 * 1024, "frame_limit")] {
         write(&j, "long-match.txt", "x".repeat(size));
         let limited = call(
@@ -354,6 +362,20 @@ async fn searches_use_literal_by_default_and_report_limits_and_failures() {
 
 #[tokio::test]
 async fn search_missing_dependency_and_timeout_are_explicit() {
+    let missing = tempfile::tempdir().unwrap();
+    let (_dir, j) = setup(Settings {
+        search_executable: Some(missing.path().join("missing-rg")),
+        ..Settings::default()
+    })
+    .await;
+    let unavailable = call(&j, "list_files", json!({})).await;
+    assert_eq!(unavailable["error"]["code"], "feature_unavailable");
+    write(&j, "available.txt", "other tools remain available\n");
+    assert_eq!(
+        call(&j, "read_file", json!({"path":"available.txt"})).await["text"],
+        "other tools remain available\n"
+    );
+    assert!(j.shutdown().await);
     let (_dir, j) = setup(Settings {
         search_executable: Some("/usr/bin/false".into()),
         ..Settings::default()
@@ -544,6 +566,43 @@ async fn edit_results_follow_real_git_and_receipts_survive_output_expiry() {
     );
     assert!(j.shutdown().await);
 }
+#[tokio::test]
+async fn malformed_diff_results_preserve_the_confirmed_edit_stage() {
+    let mut statuses = Vec::new();
+    for marker in ["malformed-check-result", "malformed-apply-result"] {
+        let (_dir, j) = setup(Settings::default()).await;
+        write(&j, "text.txt", "before\n");
+        write(&j, marker, "");
+        let result = call(
+            &j,
+            "apply_diff",
+            json!({"request_id":"malformed-result","diff":patch("text.txt","before","after")}),
+        )
+        .await;
+        assert_eq!(result["state"], "unknown");
+        assert!(result["exit_code"].is_null());
+        assert_eq!(
+            std::fs::read_to_string(j.session.cwd.join("text.txt")).unwrap(),
+            if marker == "malformed-apply-result" {
+                "after\n"
+            } else {
+                "before\n"
+            }
+        );
+        statuses.push(result["edits"][0]["status"].as_str().unwrap().to_owned());
+        let repeated = call(
+            &j,
+            "apply_diff",
+            json!({"request_id":"malformed-result","diff":patch("text.txt","before","after")}),
+        )
+        .await;
+        assert_eq!(repeated["job_id"], result["job_id"]);
+        assert_eq!(repeated["edits"], result["edits"]);
+        assert!(j.shutdown().await);
+    }
+    assert_eq!(statuses, ["not_applied", "unknown"]);
+}
+
 #[tokio::test]
 async fn post_dispatch_edit_failure_is_unknown_and_capacity_rejects_before_changes() {
     let (_dir, j) = setup(Settings::default()).await;

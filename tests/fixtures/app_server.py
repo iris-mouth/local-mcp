@@ -48,6 +48,7 @@ def run(request):
         # Exercise the adapter's actual fixed Git scripts in disposable test
         # directories. This fixture still supplies no filesystem sandbox.
         applying = '--check' not in p['command'][2]
+        malformed = 'malformed-apply-result' if applying else 'malformed-check-result'
         if not applying and pathlib.Path(p['cwd'], 'pause-check').exists():
             output(pid, b'paused check before apply\n', 'stderr'); return
         if applying and pathlib.Path(p['cwd'], 'lose-apply').exists(): os._exit(0)
@@ -67,6 +68,8 @@ def run(request):
         for thread in threads: thread.start()
         code = child.wait()
         for thread in threads: thread.join()
+        if pathlib.Path(p['cwd'], malformed).exists():
+            emit({'id':request['id'],'result':{'stdout':'','stderr':''}}); return
         finish(pid, code)
     elif mode == 'lose':
         time.sleep(.03); os._exit(0)

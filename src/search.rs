@@ -162,7 +162,7 @@ async fn run(
         command.arg("--glob").arg(glob);
     }
     if let Some((pattern, regex)) = &query {
-        command.args(["--json", "--line-number"]);
+        command.args(["--json", "--line-number", "--encoding", "none"]);
         if !regex {
             command.arg("--fixed-strings");
         }

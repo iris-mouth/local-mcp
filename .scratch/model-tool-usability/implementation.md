@@ -1,6 +1,6 @@
 # 採用9項目の実装・検証記録
 
-2026-11-07。ブランチは `codex/model-tool-usability`。実装前HEADは `e9413786f9c5aff5b975699c9fcda22fbeaf0fb3`。
+2026-11-07。ブランチは `codex/model-tool-usability`。実装前HEADは `e9413786f9c5aff5b975699c9fcda22fbeaf0fb3`。独立したレビュー後の修正版で最終検証を再実施した。
 [仕様](spec.md)の9項目を実装した。準備時点のソース・環境・検査は[baseline.md](baseline.md)に履歴として残す。
 
 ## 実装内容
@@ -45,12 +45,12 @@ Rust 1.96.0 / Cargo 1.96.0を、無視対象の`target/model-tool-usability-buil
 | --- | --- | --- |
 | cargo fmt --all -- --check | PASS | 全Rustソースの整形 |
 | cargo clippy --locked --offline --all-targets -- -D warnings | PASS | 警告なし |
-| cargo test --locked --offline --all-targets | PASS、40件 | unit 12、contracts 14、transport 3、usability 11 |
+| cargo test --locked --offline --all-targets | PASS、41件 | unit 12、contracts 14、transport 3、usability 12 |
 | cargo build --locked --offline --release | PASS | 最終releaseを生成 |
 | tests/schemas.py（最終release） | PASS | 全12ツールの定義、型付き11ツールの実MCP応答36件、native image例外、誤ったstate/textの拒否 |
-| tests/cli_ux.py（最終release） | PASS | guided setup、CLIのjobs/stop、再接続、設定保存・破損時拒否、更新・rollback fixture |
+| tests/cli_ux.py（最終release） | PASS | guided setup、CLIのjobs/stop、再接続、設定保存・破損時拒否、更新・rollback fixture。公式Codex schemaとTunnel doctorも隔離HOMEで検証 |
 | tests/connection_runtime.py（最終release） | PASS | 使い捨て接続設定・Tunnel fixture、有限retry、認証失敗、interrupt/EOF/終了時の子回収 |
-| tests/shutdown.py（最終release） | PASS | 初期化中断、EOF、owner/process group終了、診断領域の削除条件 |
+| tests/shutdown.py（最終release） | PASS | fixtureと公式Codexで初期化中断、EOF、owner/process group終了、診断領域の削除条件 |
 | tests/real_app_server.py（最終release） | PASS、77項目 | 実App ServerとmacOS sandboxの実際の挙動 |
 | CI/Release YAMLとbash -n | PASS | CI 4本、Release 10本のrunスクリプトを構文確認 |
 
@@ -62,10 +62,14 @@ Rust/IPC試験では、エラー本文への入力値の混入防止、8byteペ�
 
 77項目の名前、検証したバイナリと全`src/*.rs`・CargoファイルのSHA-256は[real-app-server-results.json](real-app-server-results.json)へ保存した。実試験の開始・終了時にソースと実行ファイルが同一であることも検査している。メモリの記録値はこの試験時の観測であり、一般的な性能保証ではない。
 
-## 実施していない受入
+## レビュー後の修正
+
+独立した2エージェントの[規約・仕様レビュー](review.md)で、任意の検索実行ファイル欠如による起動失敗、不正なGit終了応答時の編集状態、UTF-16自動変換の3件を修正した。修正前の失敗を再現し、実Gitによるファイル変更後の不正応答と同一受付再確認、UTF-16のraw検索、検索なしでも他ツールを使えることを回帰試験へ追加した。再レビューの残る指摘は両軸とも0件。
+
+## 実装検証時点で実施していない受入
 
 通常Chatで同じモデル・ホストを使う成功率・往復回数・転送量の比較は未実施。引数説明や初期予算が最適であるとは主張しない。
 GitHub Actionsの実行、Intel/Windows/Linuxでの実動作、Nix buildはこのMacでは確認していない。YAMLとshellの構文確認はリモートCI成功の代わりにしない。
-本番バイナリの置換、Tunnel・Keychain・ChatGPT登録の変更、Release公開、pushは行っていない。
+本番反映とpushは後続の明示指示で追加された作業であり、進行と結果は[切替記録](deployment.md)で追う。Releaseの新規公開は依頼されていない。
 
 チケットのStatusは既存のtriage語彙を維持し、実装の完了は`Resolution: implemented`とコメントで記録する。

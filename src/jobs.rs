@@ -184,6 +184,17 @@ struct Job {
     edit_status: &'static str,
     apply_dispatched: bool,
 }
+impl Job {
+    fn mark_unknown(&mut self, code: &'static str) {
+        self.state = State::Unknown;
+        self.error = Some(code);
+        self.edit_status = if self.apply_dispatched {
+            "unknown"
+        } else {
+            "not_applied"
+        };
+    }
+}
 struct Receipt {
     digest: Vec<u8>,
     job_id: String,
@@ -414,13 +425,7 @@ impl Jobs {
         if let Some(job) = self.store.lock().unwrap().jobs.get_mut(id)
             && job.state != State::Finished
         {
-            job.state = State::Unknown;
-            job.error = Some(code);
-            job.edit_status = if job.apply_dispatched {
-                "unknown"
-            } else {
-                "not_applied"
-            };
+            job.mark_unknown(code);
         }
         self.changed.notify_waiters();
     }
@@ -462,8 +467,10 @@ impl Jobs {
                 match result {
                     Ok(result) => {
                         let Some(code) = result["exitCode"].as_i64() else {
-                            job.state = State::Unknown;
-                            job.error = Some("missing_exit_result");
+                            job.mark_unknown("missing_exit_result");
+                            job.diff_apply = None;
+                            job.diff_input = None;
+                            job.diff_patch = None;
                             return None;
                         };
                         // Streaming results must not duplicate notification bytes.
@@ -505,32 +512,20 @@ impl Jobs {
                         job.completed = Some(Instant::now());
                     }
                     Err(error) => {
-                        job.state = State::Unknown;
-                        job.edit_status = if job.apply_dispatched {
-                            "unknown"
-                        } else {
-                            "not_applied"
-                        };
+                        job.mark_unknown(error.code);
                         job.diff_apply = None;
                         job.diff_input = None;
                         job.diff_patch = None;
-                        job.error = Some(error.code);
                     }
                 }
             }
             Event::Lost => {
                 for job in store.jobs.values_mut() {
                     if job.state != State::Finished {
-                        job.state = State::Unknown;
-                        job.edit_status = if job.apply_dispatched {
-                            "unknown"
-                        } else {
-                            "not_applied"
-                        };
+                        job.mark_unknown("backend_unavailable");
                         job.diff_apply = None;
                         job.diff_input = None;
                         job.diff_patch = None;
-                        job.error = Some("backend_unavailable");
                     }
                 }
             }

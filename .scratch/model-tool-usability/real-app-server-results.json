@@ -87,27 +87,27 @@
     {
       "source_mib": 64,
       "peak_rss_kib_by_pid": {
-        "44271": 84272,
-        "44279": 70240
+        "67147": 69440,
+        "67152": 60768
       }
     },
     {
       "source_mib": 256,
       "peak_rss_kib_by_pid": {
-        "44271": 88432,
-        "44279": 72752
+        "67147": 73568,
+        "67152": 63856
       }
     }
   ],
-  "adapter_executable_sha256": "c54ce385f4b89e77ec18f392e6d0e5fec11b60a8638fd3e99da96517d6ca017e",
+  "adapter_executable_sha256": "73a524df6b45f9b789cc3d805ee9eeb5e4fb065ca318f3f5373298708c850f13",
   "source_sha256": {
     "src/app_server.rs": "5ea214ec6f7ba6f854ba9e185616d9d0a20b2013d7afe91f9853a0ea1892d043",
     "src/cli.rs": "81017fab808fbd76e078883e775c1b58d8eff334cd7733250a2038e48c627b5d",
-    "src/config.rs": "94f8341231ad74098f51865adcc6ff811687ad58dbbcf48b0a616e69f10ccab5",
+    "src/config.rs": "41fd82d3f43565437cec9041c6a64ec28f4dbef1a3be87a9043bd7a628e4779d",
     "src/connection.rs": "6b203b175751588ae3ec4db119d74fda7d36f2310a232ec62103bc7b16442264",
     "src/files.rs": "c85905cfcc8000c0991ff8b8b63a8a5c87b536c5cd7224b7b016656715cddc3d",
     "src/image_validation.rs": "015ee31ee9910248b9d829bc5496d32c65a6d0e7a5608df605e294b55c54ff2d",
-    "src/jobs.rs": "25a3835db64ba92ac1f954b0beba3de533ebc5960bb9805dad6f9150f4e2c2b2",
+    "src/jobs.rs": "de43a304298b42bd0f6d6e895e6ed7a344884698fd5445db2af60895c64619a2",
     "src/lib.rs": "b2b65affffec538a770394da91d4cd8722ca7da7807d0e0535df15e1ae17b420",
     "src/main.rs": "671be5e871dbd9cb39d52ac01e2f70ed9c2b19d8c7dba5bdae68162b75b2f7c5",
     "src/mcp.rs": "3676f2f2aa739b90666eaf582ed4c38a66f282f7acb0c70adbbc2079b50d8625",
@@ -115,7 +115,7 @@
     "src/protocol.rs": "4735941a6539867b45e4c199b24c72d13cf03c4a15abe5467d9aceed032bdc4f",
     "src/rpc_capacity.rs": "1836c79a52bd20c9086804c62447b5eec5114ff1ef0f2b97affe5348ba955abd",
     "src/schemas.rs": "d6d064c3586d5abc16a7b484a1522418e119bf30861c409dd8e47338e412d96e",
-    "src/search.rs": "826ff4cb9036ebda4f1bbf2a878ed439057ab43eb2dc8a7e12ecf5cf230c31fd",
+    "src/search.rs": "4be63f003635e7e591ddd1e5e790406618853b7b81bd9644b279e33d10b9ea1b",
     "src/session.rs": "a72fbe51863cba0f0a4579b63c9d1867983adc796e88547cd28ddf81ea31c88b",
     "Cargo.toml": "51d80011bccd20ec9cf56a5531a9a1d460debfd0f0069b7025da1f8c905513ff",
     "Cargo.lock": "61b56a962ae75c21bd1e90e3396d87a6c75675ccb1240111a5c6c7293df0c354"

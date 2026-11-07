@@ -158,7 +158,7 @@ impl Session {
         let search_executable = match &settings.search_executable {
             Some(path) => {
                 ensure!(path.is_absolute(), "search_executable must be absolute");
-                Some(std::fs::canonicalize(path).context("cannot resolve search_executable")?)
+                std::fs::canonicalize(path).ok()
             }
             None => environment.get("PATH").and_then(|path| {
                 std::env::split_paths(path)

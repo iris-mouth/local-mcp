@@ -289,6 +289,7 @@ Search defaults to the workspace, single-line literal matching, ignore rules ena
 hidden files excluded. Set `regex`, `glob`, `hidden`, or `respect_ignore`
 explicitly when needed. Searches do not recursively follow symlinks. Results
 contain paths and, for text matches, original line text and a one-based `line`.
+Search does not transcode UTF-16 or other encodings into UTF-8 matches.
 The default limit is 50, maximum 500. `truncated`/`truncation_reason` distinguish
 count, delivery, frame and time limits; non-UTF-8 matches/paths are counted as
 skipped. No index or snapshot is retained. Search uses fixed argv and a bounded

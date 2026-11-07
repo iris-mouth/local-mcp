@@ -31,7 +31,7 @@
             nativeBuildInputs = with pkgs; [
               makeWrapper
             ];
-            nativeCheckInputs = with pkgs; [ python3 ripgrep ];
+            nativeCheckInputs = with pkgs; [ python3 ripgrep git ];
             preCheck = ''
               patchShebangs tests/fixtures/app_server.py
             '';
