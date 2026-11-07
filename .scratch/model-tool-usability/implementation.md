@@ -69,7 +69,7 @@ Rust/IPC試験では、エラー本文への入力値の混入防止、8byteペ�
 ## 実装検証時点で実施していない受入
 
 通常Chatで同じモデル・ホストを使う成功率・往復回数・転送量の比較は未実施。引数説明や初期予算が最適であるとは主張しない。
-GitHub Actionsの実行、Intel/Windows/Linuxでの実動作、Nix buildはこのMacでは確認していない。YAMLとshellの構文確認はリモートCI成功の代わりにしない。
+後続の[作業ブランチ・mainのCI](deployment.md)で、macOS arm64/Intel・Ubuntu・Windowsの全4ジョブが成功した。Linux/Windowsの配備・sandboxを認定する試験ではない。Nix buildは未実施。
 本番反映とpushは後続の明示指示で追加された作業であり、進行と結果は[切替記録](deployment.md)で追う。Releaseの新規公開は依頼されていない。
 
 チケットのStatusは既存のtriage語彙を維持し、実装の完了は`Resolution: implemented`とコメントで記録する。

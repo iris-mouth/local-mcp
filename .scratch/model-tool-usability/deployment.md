@@ -24,4 +24,22 @@
 
 ## 結果
 
-作業中。マージと実接続での試用が完了した時点で追記する。
+### 試用とマージ
+
+- 本番候補の生成済みruntimeで、実MCPの9フローと19応答のschema検証が成功。ファイル一覧→literal検索→行読取、200行の継続と日本語CRLF、修正箇所を示すエラー、実Git編集と同一受付再確認、8byteのUnicodeページ、実行中ジョブ一覧、停止後の実終了を確認し、所有する候補Sessionを正常終了した。
+- [作業ブランチのCI](https://github.com/iris-mouth/local-mcp/actions/runs/42335249991)はmacOS arm64・Intel、Ubuntu、Windowsの全4ジョブ成功。
+- レビュー修正版`63c68694b11f8c4df68ff4887e8d7e04e9441af9`をmainへfast-forwardで統合し、origin/mainへpushした。
+- main上でも同一SHAの[CI](https://github.com/iris-mouth/local-mcp/actions/runs/42335746677)が全4ジョブ成功した。
+
+### 本番ランタイム
+
+- 新しい既定: `~/.local/share/local-mcp-usability-63c68694-live`。
+- 検証・配置済みバイナリSHA256: `73a524df6b45f9b789cc3d805ee9eeb5e4fb065ca318f3f5373298708c850f13`。最終の実App Server受入と一致した。選択した公式CodexのSHA256も受入時と一致した。
+- 旧`~/.local/share/local-mcp-v0.1.0`は変更せず復旧用に保持した。切替直前に旧Sessionのジョブ0件を再確認し、同じowner/socketを照合してSIGINTで終了。所有プロセス・socket・診断領域・Tunnel状態ファイルが回収された。別親のプロセスなので旧ownerの終了コード自体は取得していない。
+- サポート済みのsetupで、元のTunnel・client・公式Codex・Keychain参照を引き継ぎ、新規runtimeの生成と既定化を実施した。設定ファイルは0600で、元の固定認可上限と最近の作業先を維持。追加設定は検索用の絶対パスで、編集metadataは新しい既定1MiBとした。
+- 新launcherでこのリポジトリのSessionとApp Serverを起動できた。実Tunnelは既存KeychainのmacOSアクセス確認で待機中で、本人へMac側での確認を依頼した。実疎通と共有ツール定義の再取得は、この確認が完了してから検証する。
+- macOSの確認を担当するSecurityAgentと、同じ新runtime配下のcredential helperを親とするsecurityプロセスを確認した。コンピューター操作ツールはSecurityAgentへのアクセスを拒否したため、OS側の本人操作を待つ。キーを別経路で取得したり、既存の参照や権限を変更して回避したりしていない。
+
+### 復旧
+
+新Sessionの実終了を確認してから、保持した旧runtimeの`start-local.command`を作業先指定で明示起動する。既存プラグインでツールを再取得すると旧9ツールへ戻せる。既定設定の切替前バックアップもローカルの非公開記録に保持した。元の終了済みジョブや受付を再実行・復旧する手順ではない。

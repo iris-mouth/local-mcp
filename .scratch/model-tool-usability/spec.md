@@ -4,7 +4,7 @@ Status: ready-for-agent
 Resolution: implemented
 
 2026-11-07。本人が採用した9項目を実装。基準HEADは `2ee8bde6b64f30ef95e294faecc1352892893e3b`、準備コミットは `e9413786f9c5aff5b975699c9fcda22fbeaf0fb3`、作業ブランチは `codex/model-tool-usability`。
-この記録は実装範囲と受入条件を定める。実装・検証結果は[implementation.md](implementation.md)、準備時点の記録は[baseline.md](baseline.md)を参照する。通常Chatでのモデル成功率評価と本番配置は未実施。
+この記録は実装範囲と受入条件を定める。実装・検証結果は[implementation.md](implementation.md)、準備時点の記録は[baseline.md](baseline.md)を参照する。通常Chatでのモデル成功率評価は未実施。後続のマージと本番反映は[切替記録](deployment.md)で追う。
 
 ## 採用範囲
 
