@@ -21,7 +21,13 @@ and not notarized; macOS may require its normal first-open approval.
 Separately obtain an official [Codex executable](https://github.com/openai/codex/releases)
 with the required command capabilities and the official
 [Tunnel client](https://github.com/openai/tunnel-client/releases). local-mcp never
-downloads or updates these dependencies. Run the downloaded local-mcp:
+downloads or updates these dependencies. The optional `list_files` and
+`search_files` tools also need [ripgrep](https://github.com/BurntSushi/ripgrep).
+Install it separately or set an absolute `search_executable` in trusted Settings.
+Keep the executable outside all workspace, temporary, extra and additional write
+roots so a permitted file edit cannot replace the adapter's read-only backend.
+Its path is resolved at session startup; missing or unrecognizable executables
+produce `feature_unavailable`. Other tools remain available. Run local-mcp:
 
 ```sh
 ./local-mcp setup
@@ -247,6 +253,55 @@ Use explicit argv, including an explicit shell or `env` command when needed.
 | `command_status` | Exactly one job/request ID, exit result and retained output with a cursor |
 | `write_stdin` | Exactly one UTF-8 `data`, `eof: true`, or PTY `resize` |
 | `stop_command` | One stop attempt on the original backend connection |
+| `list_jobs` | Bounded live job IDs, states and exit codes in the current runtime |
+| `list_files` | File-name/glob discovery with ignore rules and explicit truncation |
+| `search_files` | Literal text search by default; opt-in regex, paths and one-based lines |
+
+Tool definitions describe each argument, units and defaults. Invalid arguments
+identify a field and expected value without quoting the invalid content. A
+`dispatch: not_attempted` error describes this rejected call, not the historical
+outcome of another call with the same request ID. Delivery/response loss still
+requires observing the original request before issuing another change. Text
+tools publish typed response schemas; images keep their native MCP content.
+
+`read_file` defaults to 200 complete lines and 64 KiB of source text, clamped to
+the trusted message budget. `max_lines` and `max_bytes` select a smaller or larger
+delivery within that budget. Follow `next_line` when `has_more` is true. A line
+larger than the requested budget returns an explicit limit; increase `max_bytes`
+within the ceiling or use a CLI byte-range read. Source file size remains unlimited.
+
+`command_status` accepts `max_output_bytes` for the combined stdout/stderr source
+bytes. Its default is 16 KiB, clamped to `output_page_bytes`; explicit values must
+be at least 8 bytes and no larger than that trusted ceiling. Each stream gets
+half. Initial execution/diff responses use the same default. This changes
+delivery only, leaving execution, retained output and expiry untouched.
+
+Valid UTF-8 is not split into replacement characters at page boundaries.
+`pending_utf8` means an unfinished character awaits another backend notification;
+`budget_limited` means the next character cannot fit this page. Original invalid
+bytes and retention gaps remain explicit through `lossy` and `gap`.
+
+`list_jobs` defaults to 50 entries (maximum 200). Follow its `next_cursor` with
+the same limit/runtime, or omit it to refresh. The list is live, not a snapshot,
+and does not include command bodies or recover jobs across owner restarts.
+
+Search defaults to the workspace, single-line literal matching, ignore rules enabled and
+hidden files excluded. Set `regex`, `glob`, `hidden`, or `respect_ignore`
+explicitly when needed. Searches do not recursively follow symlinks. Results
+contain paths and, for text matches, original line text and a one-based `line`.
+The default limit is 50, maximum 500. `truncated`/`truncation_reason` distinguish
+count, delivery, frame and time limits; non-UTF-8 matches/paths are counted as
+skipped. No index or snapshot is retained. Search uses fixed argv and a bounded
+capability check, with child processes stopped at session shutdown.
+
+`apply_diff` continues to accept Git unified diffs. Its `edits` entries contain
+paths, operations and **planned** line counts, separately from `status`:
+`planned`, `applied`, `not_applied`, or `unknown`. A check rejection can establish
+non-application; an error after apply dispatch can leave partial effects and is
+reported as unknown. Git success confirms that invocation, not that the file
+will remain unchanged afterwards. Receipts retain this metadata after output
+expires. A patch may target at most 256 files; metadata capacity is checked before
+dispatch and never causes an old edit to be automatically replayed.
 
 Execution, diff and input require a client `request_id`. Same ID and content
 return the original receipt/state. Changed content is rejected. A new ID is a
@@ -289,12 +344,14 @@ lifetime. The backend explicitly receives `disableTimeout` and `disableOutputCap
 | `max_image_pixels` | 32 Mi pixels, checked before raster allocation |
 | `max_rpc_inflight` | 64 |
 | `rpc_timeout_ms` / `shutdown_ms` | 10000 / 5000 |
+| `edit_metadata_bytes_total` | 1 MiB across the session; per-edit delivery also bounded |
+| `search_executable` | Optional absolute ripgrep path; otherwise trusted startup PATH |
 
 Each stream uses half the per-job buffer. Text/image delivery budgets are derived
 from the message limit, including JSON/base64 expansion. These are configurable
 initial resource budgets; they are not transport-provider or performance guarantees.
 The owner reserves `max_rpc_inflight` slots each for work (including long status
-waits) and controls (session info, immediate status, input and stop). A separate
+waits/searches) and controls (session info, job lists, immediate status, input and stop). A separate
 pool of that size bounds incoming IPC frame reads; admitted requests retain their
 work/control slot through reply delivery. Each MCP facade likewise reserves 64
 slots per group. Backend control ACKs have their own `max_rpc_inflight` bound.
@@ -320,9 +377,19 @@ cargo test --locked
 python3 tests/cli_ux.py
 python3 tests/connection_runtime.py
 python3 tests/shutdown.py
+python3 -m venv target/schema-tests
+target/schema-tests/bin/python -m pip install -r tests/requirements-schemas.txt
+target/schema-tests/bin/python tests/schemas.py
 cargo build --locked --release
 LOCAL_MCP_TEST_BINARY=target/release/local-mcp python3 tests/real_app_server.py /absolute/path/to/codex
 ```
+
+Rust search integration tests require ripgrep on PATH. The schema validator is a
+development-only Python dependency; it is not used by the deployed executable.
+CI tests actual MCP responses against published schemas, in addition to the
+fault-backend contracts and native-image wire regression.
+See the [tool usability implementation record](.scratch/model-tool-usability/implementation.md)
+for the accepted changes, final verification results and remaining Chat acceptance.
 
 The opt-in real acceptance script creates disposable files and a temporary
 localhost-only HTTP server to test network denial/explicit expansion. It does not

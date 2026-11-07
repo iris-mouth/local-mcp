@@ -22,6 +22,8 @@ pub struct Settings {
     pub max_rpc_inflight: usize,
     pub rpc_timeout_ms: u64,
     pub shutdown_ms: u64,
+    pub search_executable: Option<PathBuf>,
+    pub edit_metadata_bytes_total: usize,
     pub write_roots: Vec<PathBuf>,
     pub extra_roots: Vec<PathBuf>,
     pub allow_network: bool,
@@ -45,6 +47,8 @@ impl Default for Settings {
             max_rpc_inflight: 64,
             rpc_timeout_ms: 10000,
             shutdown_ms: 5000,
+            search_executable: None,
+            edit_metadata_bytes_total: 1024 * 1024,
             write_roots: vec![],
             extra_roots: vec![],
             allow_network: false,
@@ -57,7 +61,7 @@ impl Default for Settings {
 impl Settings {
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.max_jobs > 0 && self.max_receipts > 0,
+            self.max_jobs > 0 && self.max_receipts > 0 && self.edit_metadata_bytes_total > 0,
             "job/receipt limits must be positive"
         );
         ensure!(
@@ -101,6 +105,8 @@ pub struct Session {
     pub settings: Settings,
     #[serde(skip)]
     pub environment: BTreeMap<String, String>,
+    #[serde(skip)]
+    pub search_executable: Option<PathBuf>,
 }
 impl Session {
     pub fn new(id: String, cwd: PathBuf, directory: &Path, mut settings: Settings) -> Result<Self> {
@@ -149,6 +155,27 @@ impl Session {
         settings.write_roots = roots.clone();
         settings.extra_roots = extra_roots.clone();
         let mut environment = safe_environment();
+        let search_executable = match &settings.search_executable {
+            Some(path) => {
+                ensure!(path.is_absolute(), "search_executable must be absolute");
+                Some(std::fs::canonicalize(path).context("cannot resolve search_executable")?)
+            }
+            None => environment.get("PATH").and_then(|path| {
+                std::env::split_paths(path)
+                    .filter(|p| p.is_absolute())
+                    .map(|p| p.join(if cfg!(windows) { "rg.exe" } else { "rg" }))
+                    .find(|p| p.is_file())
+                    .and_then(|p| std::fs::canonicalize(p).ok())
+            }),
+        };
+        // A permitted write must not replace a host-executed read-only backend.
+        // Expansion roots also belong to the fixed authorization ceiling.
+        let search_executable = search_executable.filter(|executable| {
+            !roots
+                .iter()
+                .chain(extra_roots.iter())
+                .any(|root| executable.starts_with(root))
+        });
         environment.insert(
             "TMPDIR".into(),
             temporary_directory.to_string_lossy().into_owned(),
@@ -182,6 +209,7 @@ impl Session {
             diagnostics_directory,
             settings,
             environment,
+            search_executable,
         })
     }
 }

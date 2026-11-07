@@ -18,6 +18,60 @@ use std::{
 };
 use tokio::sync::{Notify, mpsc};
 
+#[cfg(test)]
+mod output_tests {
+    use super::Output;
+
+    #[test]
+    fn valid_unicode_survives_page_and_notification_boundaries() {
+        let source = "あ😀\r\nい";
+        let mut output = Output::default();
+        output.push(&source.as_bytes()[..2], 128);
+        let (page, cursor) = output.page(0, 4, false);
+        assert_eq!(cursor, 0);
+        assert_eq!(page["pending_utf8"], true);
+        assert_eq!(page["lossy"], false);
+        output.push(&source.as_bytes()[2..], 128);
+        let mut text = String::new();
+        let mut cursor = 0;
+        while cursor < source.len() as u64 {
+            let (page, next) = output.page(cursor, 4, true);
+            assert!(next > cursor);
+            assert_eq!(page["lossy"], false);
+            text.push_str(page["text"].as_str().unwrap());
+            cursor = next;
+        }
+        assert_eq!(text, source);
+    }
+
+    #[test]
+    fn invalid_final_bytes_and_retention_gaps_stay_explicit() {
+        let mut output = Output::default();
+        output.push(b"a\xff\xe3", 8);
+        let (page, cursor) = output.page(0, 8, false);
+        assert_eq!(cursor, 2);
+        assert_eq!(page["lossy"], true);
+        assert_eq!(page["pending_utf8"], true);
+        let (page, cursor) = output.page(cursor, 8, true);
+        assert_eq!(cursor, 3);
+        assert_eq!(page["lossy"], true);
+        output.push("あ".as_bytes(), 2);
+        let (page, _) = output.page(0, 8, true);
+        assert_eq!(page["gap"], true);
+        assert_eq!(page["lossy"], true);
+    }
+
+    #[test]
+    fn too_small_page_reports_a_limit_without_consuming_a_character() {
+        let mut output = Output::default();
+        output.push("😀".as_bytes(), 8);
+        let (page, cursor) = output.page(0, 1, true);
+        assert_eq!(cursor, 0);
+        assert_eq!(page["budget_limited"], true);
+        assert_eq!(page["lossy"], false);
+    }
+}
+
 #[derive(Default)]
 struct Output {
     bytes: VecDeque<u8>,
@@ -38,20 +92,44 @@ impl Output {
         self.bytes.drain(..count);
         self.start += count as u64;
     }
-    fn page(&self, position: u64, cap: usize) -> (Value, u64) {
+    fn page(&self, position: u64, cap: usize, terminal: bool) -> (Value, u64) {
         let actual = position.max(self.start).min(self.end);
-        let bytes: Vec<u8> = self
+        let mut bytes: Vec<u8> = self
             .bytes
             .iter()
             .skip((actual - self.start) as usize)
             .take(cap)
             .copied()
             .collect();
+        let selected = bytes.len();
+        let source_end = actual + selected as u64 == self.end;
+        // Skip genuinely invalid sequences, but retain a partial final character
+        // for the next page/notification. Cursors always refer to source bytes.
+        let mut offset = 0;
+        while offset < bytes.len() {
+            match std::str::from_utf8(&bytes[offset..]) {
+                Ok(_) => break,
+                Err(error) => {
+                    offset += error.valid_up_to();
+                    match error.error_len() {
+                        Some(length) => offset += length,
+                        None if terminal && source_end => break,
+                        None => {
+                            bytes.truncate(offset);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         let end = actual + bytes.len() as u64;
+        let pending_utf8 = bytes.len() < selected && source_end && !terminal;
+        let budget_limited = bytes.is_empty() && actual < self.end && !pending_utf8;
         (
             json!({"text":String::from_utf8_lossy(&bytes),"lossy":std::str::from_utf8(&bytes).is_err(),
             "start_byte":actual,"end_byte":end,"source_end_byte":self.end,"retained_start_byte":self.start,
-            "gap":position<self.start,"has_more":end<self.end,"source_truncated":self.source_truncated,"expired":self.expired}),
+            "gap":position<self.start,"has_more":end<self.end,"source_truncated":self.source_truncated,"expired":self.expired,
+            "pending_utf8":pending_utf8,"budget_limited":budget_limited}),
             end,
         )
     }
@@ -102,6 +180,9 @@ struct Job {
     diff_input: Option<String>,
     diff_patch: Option<String>,
     effective_access: Value,
+    edits: Vec<crate::files::DiffTarget>,
+    edit_status: &'static str,
+    apply_dispatched: bool,
 }
 struct Receipt {
     digest: Vec<u8>,
@@ -115,6 +196,7 @@ struct Store {
     receipts: HashMap<String, Receipt>,
     process_jobs: HashMap<String, String>,
     closing: bool,
+    edit_metadata_bytes: usize,
 }
 pub struct Jobs {
     pub session: Session,
@@ -132,6 +214,13 @@ struct Cursor {
     stdout: u64,
     stderr: u64,
 }
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JobsCursor {
+    runtime: String,
+    after: String,
+    limit: usize,
+}
 enum Action {
     Exec(String, Value),
     Input(String, Value),
@@ -139,6 +228,81 @@ enum Action {
 impl Jobs {
     pub(crate) fn close_admission(&self) {
         self.store.lock().unwrap().closing = true;
+        self.changed.notify_waiters();
+    }
+    pub(crate) async fn until_closing(&self) {
+        loop {
+            let notified = self.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.store.lock().unwrap().closing {
+                return;
+            }
+            notified.await;
+        }
+    }
+    pub fn list(&self, args: ListJobsArgs) -> rmcp::model::CallToolResult {
+        if let Err(error) = self.validate_scope(&args.session_id, &args.runtime_id) {
+            return failure("scope_mismatch", error.to_string());
+        }
+        let limit = args.limit.unwrap_or(50);
+        if !(1..=200).contains(&limit) {
+            return invalid_argument("limit", "1..=200 jobs");
+        }
+        let after = match args.cursor {
+            None => String::new(),
+            Some(cursor) => {
+                let decoded = (cursor.len() <= 4096)
+                    .then(|| URL_SAFE_NO_PAD.decode(cursor).ok())
+                    .flatten()
+                    .and_then(|bytes| serde_json::from_slice::<JobsCursor>(&bytes).ok());
+                match decoded {
+                    Some(cursor)
+                        if cursor.runtime == self.session.runtime_id && cursor.limit == limit =>
+                    {
+                        cursor.after
+                    }
+                    _ => {
+                        return failure(
+                            "invalid_cursor",
+                            "job-list cursor must use the same runtime and limit",
+                        );
+                    }
+                }
+            }
+        };
+        let mut entries = Vec::new();
+        let mut used = 0;
+        let mut more = false;
+        for job in self.summaries().into_iter().filter(|job| job.id > after) {
+            let value = json!({"job_id":job.id,"state":job.state,"exit_code":job.exit_code});
+            let bytes = serde_json::to_vec(&value).expect("job summary").len();
+            if entries.len() == limit || used + bytes > self.session.settings.max_message_bytes / 16
+            {
+                more = true;
+                break;
+            }
+            used += bytes;
+            entries.push(value);
+        }
+        let cursor = if more {
+            entries.last().map(|entry| {
+                URL_SAFE_NO_PAD.encode(
+                    serde_json::to_vec(&JobsCursor {
+                        runtime: self.session.runtime_id.clone(),
+                        after: entry["job_id"].as_str().unwrap().into(),
+                        limit,
+                    })
+                    .unwrap(),
+                )
+            })
+        } else {
+            None
+        };
+        success(
+            json!({"session_id":self.session.id,"runtime_id":self.session.runtime_id,
+            "jobs":entries,"has_more":more,"next_cursor":cursor,"snapshot":false}),
+        )
     }
     pub(crate) fn summaries(&self) -> Vec<JobSummary> {
         let store = self.store.lock().unwrap();
@@ -252,6 +416,11 @@ impl Jobs {
         {
             job.state = State::Unknown;
             job.error = Some(code);
+            job.edit_status = if job.apply_dispatched {
+                "unknown"
+            } else {
+                "not_applied"
+            };
         }
         self.changed.notify_waiters();
     }
@@ -310,6 +479,7 @@ impl Jobs {
                                 job.state = State::Finished;
                                 job.exit_code = Some(code);
                                 job.error = Some("diff_stopped_before_apply");
+                                job.edit_status = "not_applied";
                                 job.completed = Some(Instant::now());
                                 return None;
                             }
@@ -325,10 +495,22 @@ impl Jobs {
                         job.diff_patch = None;
                         job.state = State::Finished;
                         job.exit_code = Some(code);
+                        job.edit_status = if !job.apply_dispatched {
+                            "not_applied"
+                        } else if code == 0 {
+                            "applied"
+                        } else {
+                            "unknown"
+                        };
                         job.completed = Some(Instant::now());
                     }
                     Err(error) => {
                         job.state = State::Unknown;
+                        job.edit_status = if job.apply_dispatched {
+                            "unknown"
+                        } else {
+                            "not_applied"
+                        };
                         job.diff_apply = None;
                         job.diff_input = None;
                         job.diff_patch = None;
@@ -340,6 +522,11 @@ impl Jobs {
                 for job in store.jobs.values_mut() {
                     if job.state != State::Finished {
                         job.state = State::Unknown;
+                        job.edit_status = if job.apply_dispatched {
+                            "unknown"
+                        } else {
+                            "not_applied"
+                        };
                         job.diff_apply = None;
                         job.diff_input = None;
                         job.diff_patch = None;
@@ -553,6 +740,7 @@ impl Jobs {
                     request_id: None,
                     cursor: None,
                     wait_ms: Some(0),
+                    max_output_bytes: None,
                 })
                 .await
             }
@@ -621,6 +809,9 @@ impl Jobs {
                 diff_input: None,
                 diff_patch: None,
                 effective_access: effective,
+                edits: Vec::new(),
+                edit_status: "planned",
+                apply_dispatched: false,
             },
         );
         store.receipts.insert(
@@ -649,9 +840,18 @@ impl Jobs {
             {
                 job.state = State::Finished;
                 job.error = Some("stopped_before_dispatch");
+                job.edit_status = "not_applied";
                 job.completed = Some(Instant::now());
                 self.changed.notify_waiters();
                 return;
+            }
+            if let Some(job) = store.jobs.get_mut(&id)
+                && !job.edits.is_empty()
+                && job.diff_apply.is_none()
+            {
+                // Set before the RPC attempt: a failed write can still have
+                // reached the backend, so a failure afterwards is uncertain.
+                job.apply_dispatched = true;
             }
         }
         match self.backend.exec(id.clone(), params).await {
@@ -670,11 +870,30 @@ impl Jobs {
         if let Err(e) = self.validate_scope(&args.session_id, &args.runtime_id) {
             return failure("scope_mismatch", e.to_string());
         }
-        if args.job_id.is_some() == args.request_id.is_some() || args.wait_ms.unwrap_or(0) > 30000 {
+        let ceiling = self.session.settings.output_page_bytes;
+        let budget = args.max_output_bytes.unwrap_or(16384.min(ceiling));
+        if args.max_output_bytes.is_some() && ceiling < 8 {
             return failure(
-                "invalid_arguments",
-                "provide exactly one job_id or request_id; wait_ms <= 30000",
+                "delivery_limit",
+                "The trusted output page is smaller than 8 bytes. Omit max_output_bytes to inspect job state and explicit budget_limited flags.",
             );
+        }
+        // Initial responses call status after dispatch. Tiny trusted ceilings
+        // must not falsely report that an already-executed job was rejected.
+        if args.max_output_bytes.is_some() && (budget < 8 || budget > ceiling) {
+            return invalid_argument(
+                "max_output_bytes",
+                &format!("8..={ceiling} source bytes, shared between streams"),
+            );
+        }
+        if args.job_id.is_some() == args.request_id.is_some() {
+            return invalid_argument(
+                "job_id/request_id",
+                "exactly one original job_id or request_id",
+            );
+        }
+        if args.wait_ms.unwrap_or(0) > 30000 {
+            return invalid_argument("wait_ms", "0..=30000 milliseconds of observation");
         }
         let id = {
             let store = self.store.lock().unwrap();
@@ -691,6 +910,9 @@ impl Jobs {
             return failure("not_found", "unknown request_id");
         };
         let cursor = match args.cursor {
+            Some(s) if s.len() > 4096 => {
+                return failure("invalid_cursor", "cursor exceeds 4096 bytes");
+            }
             Some(s) => match URL_SAFE_NO_PAD
                 .decode(s)
                 .ok()
@@ -727,14 +949,10 @@ impl Jobs {
                     return failure("invalid_cursor", "cursor is ahead of source output");
                 }
                 let terminal = job.state == State::Finished || job.state == State::Unknown;
-                let changed = job.stdout.end > cursor.stdout || job.stderr.end > cursor.stderr;
+                let (stdout, so) = job.stdout.page(cursor.stdout, budget / 2, terminal);
+                let (stderr, se) = job.stderr.page(cursor.stderr, budget / 2, terminal);
+                let changed = so > cursor.stdout || se > cursor.stderr;
                 if terminal || changed || tokio::time::Instant::now() >= deadline {
-                    let (stdout, so) = job
-                        .stdout
-                        .page(cursor.stdout, self.session.settings.output_page_bytes / 2);
-                    let (stderr, se) = job
-                        .stderr
-                        .page(cursor.stderr, self.session.settings.output_page_bytes / 2);
                     let next = URL_SAFE_NO_PAD.encode(
                         serde_json::to_vec(&Cursor {
                             runtime: cursor.runtime.clone(),
@@ -747,12 +965,15 @@ impl Jobs {
                     let receipt = args.request_id.as_ref().and_then(|r| store.receipts.get(r));
                     Some(success(
                         json!({"session_id":self.session.id,"runtime_id":self.session.runtime_id,"job_id":id,
-                        "request_id":args.request_id,"state":job.state,"exit_code":job.exit_code,"error":job.error.or(job.output_error),
+                        "request_id":args.request_id,"state":job.state,"exit_code":job.exit_code,"error":job.error.or(job.output_error),"output_budget_bytes":budget,
                         "stdout":stdout,"stderr":stderr,"next_cursor":next,"input_delivery_unknown":job.input_unknown,
                         "input_closed":job.input_closed,"pty_multiplexed":job.input==InputMode::Pty,
                         "output_unavailable":job.output_error.is_some(),"output_error":job.output_error,
                         "stop_ack":job.stop_ack,"effective_access":job.effective_access,
-                        "input_receipt":receipt.filter(|r|r.input).and_then(|r|r.input_result.clone())}),
+                        "input_receipt":receipt.filter(|r|r.input).and_then(|r|r.input_result.clone()),
+                        "edits":if job.edits.is_empty(){Value::Null}else{json!(job.edits.iter().map(|target|{
+                            let mut value=serde_json::to_value(target).unwrap();value["status"]=json!(job.edit_status);value
+                        }).collect::<Vec<_>>())}}),
                     ))
                 } else {
                     None
@@ -933,7 +1154,9 @@ impl Jobs {
                 if let Some(receipt)=store.receipts.get(&args.request_id){ensure!(receipt.digest==digest,"request_id_mismatch");return Ok((receipt.job_id.clone(),None));}
                 ensure!(!store.jobs.values().any(|j|j.diff_apply.is_some()||j.effective_access["operation"]=="apply_diff"&&j.state!=State::Finished),"diff_busy");
             }
-            crate::files::validate_diff(&self.session,&args.diff).await?;
+            let targets=crate::files::validate_diff(&self.session,&args.diff).await?;
+            let metadata_bytes=serde_json::to_vec(&targets)?.len();
+            ensure!(metadata_bytes<=self.session.settings.max_message_bytes/32,"edit metadata exceeds delivery budget");
             let exec=ExecArgs{session_id:args.session_id.clone(),runtime_id:args.runtime_id.clone(),request_id:args.request_id.clone(),
                 argv:vec!["/bin/sh".into(),"-c".into(),"printf 'local-mcp Git check ready\\n' >&2; exec git -c core.hooksPath=/dev/null apply --recount --whitespace=nowarn --check -".into()],cwd:None,wait_ms:Some(30000),input_mode:Some(InputMode::Pipe),size:None};
             // The fixed script emits readiness; patch bytes are delivered once through stdin, never shell interpolation or a temporary file.
@@ -945,12 +1168,15 @@ impl Jobs {
             {
                 let store=self.store.lock().unwrap();
                 if !store.receipts.contains_key(&args.request_id){ensure!(!store.jobs.values().any(|j|j.effective_access["operation"]=="apply_diff"&&j.state!=State::Finished),"diff_busy");}
+                if !store.receipts.contains_key(&args.request_id){ensure!(metadata_bytes<=self.session.settings.edit_metadata_bytes_total.saturating_sub(store.edit_metadata_bytes),"edit metadata capacity");}
             }
             let result=self.reserve(&args.request_id,digest,check,access,InputMode::Closed,Some(apply))?;
             if result.1.is_some(){
                 let mut store=self.store.lock().unwrap();
+                store.edit_metadata_bytes+=metadata_bytes;
                 let job=store.jobs.get_mut(&result.0).unwrap();
                 job.diff_input=Some(args.diff.clone());job.diff_patch=Some(args.diff.clone());
+                job.edits=targets;
             }
             Ok::<_,anyhow::Error>(result)
         }.await;
@@ -967,6 +1193,7 @@ impl Jobs {
                     request_id: None,
                     cursor: None,
                     wait_ms: Some(0),
+                    max_output_bytes: None,
                 })
                 .await
             }
@@ -974,6 +1201,7 @@ impl Jobs {
         }
     }
     pub async fn shutdown(self: &Arc<Self>) -> bool {
+        self.close_admission();
         let active = {
             let mut store = self.store.lock().unwrap();
             store.closing = true;

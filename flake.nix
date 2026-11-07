@@ -31,6 +31,10 @@
             nativeBuildInputs = with pkgs; [
               makeWrapper
             ];
+            nativeCheckInputs = with pkgs; [ python3 ripgrep ];
+            preCheck = ''
+              patchShebangs tests/fixtures/app_server.py
+            '';
 
             postInstall = ''
               wrapProgram $out/bin/local-mcp \
@@ -39,6 +43,7 @@
                     [
                       pkgs.bash
                       pkgs.git
+                      pkgs.ripgrep
                     ]
                     ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.bubblewrap ]
                   )
@@ -74,6 +79,7 @@
             packages = with pkgs; [
               cargo
               git
+              ripgrep
               rustc
               rustfmt
             ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.bubblewrap ];

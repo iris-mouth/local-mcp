@@ -24,7 +24,7 @@ impl RpcCapacity {
         let capacity = if immediate_status
             || matches!(
                 call.name.as_str(),
-                "session_info" | "write_stdin" | "stop_command"
+                "session_info" | "list_jobs" | "write_stdin" | "stop_command"
             ) {
             &self.control
         } else {

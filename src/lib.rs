@@ -12,4 +12,6 @@ pub mod mcp;
 pub mod preferences;
 pub mod protocol;
 mod rpc_capacity;
+pub mod schemas;
+pub mod search;
 pub mod session;

@@ -18,6 +18,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust
         run: rustup show
+      - name: Install search test dependency
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install ripgrep
+          else
+            sudo apt-get update
+            sudo apt-get install -y ripgrep
+          fi
       - name: Test
         run: cargo test --locked --all-targets
       - name: Lint and CLI acceptance on macOS
@@ -29,3 +39,6 @@ jobs:
           python3 tests/cli_ux.py
           python3 tests/connection_runtime.py
           python3 tests/shutdown.py
+          python3 -m venv target/schema-tests
+          target/schema-tests/bin/python -m pip install -r tests/requirements-schemas.txt
+          target/schema-tests/bin/python tests/schemas.py

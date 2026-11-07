@@ -108,6 +108,13 @@ def main():
             check('host-user read outside write roots preserved',outside_read['ok'] and 'max_jobs' in outside_read['text'])
             read=data(tool(session,'read_file',runtime_id=runtime,path='text.txt'))
             check('UTF-8 CRLF preserved',read['text']=='before\r\n')
+            (project/'many.txt').write_text('あ\r\n'*250)
+            bounded=data(tool(session,'read_file',runtime_id=runtime,path='many.txt'))
+            check('default file read returns 200 complete lines',bounded['lines_returned']==200 and bounded['next_line']==201)
+            tiny=data(tool(session,'read_file',runtime_id=runtime,path='many.txt',max_bytes=10))
+            check('explicit read byte budget preserves CRLF',tiny['text']=='あ\r\n'*2 and tiny['next_line']==3)
+            invalid=data(tool(session,'exec_command',runtime_id=runtime,request_id='bad-argv',argv='private-sentinel'))
+            check('invalid arguments identify field without echoing content',invalid['error']['field']=='argv' and 'private-sentinel' not in json.dumps(invalid))
             (project/'range.txt').write_bytes(b'first\r\n'+b'x'*(2*1024*1024)+b'\xff')
             ranged=data(tool(session,'read_file',runtime_id=runtime,path='range.txt',start_line=1,max_lines=1))
             check('requested line ignores oversized invalid UTF-8 following line',ranged['text']=='first\r\n' and ranged['lines_returned']==1 and ranged['has_more'] and ranged['next_line']==2)
@@ -118,12 +125,34 @@ def main():
             applied=data(tool(session,'apply_diff',runtime_id=runtime,request_id='patch',diff=patch))
             applied=wait(session,runtime,applied['job_id'])
             check('Git check then apply creates text file',applied['exit_code']==0 and (project/'new.txt').read_text()=='created\n')
+            check('file edit result confirms creation separately from planned counts',applied['edits'][0]['operation']=='create' and applied['edits'][0]['status']=='applied' and applied['edits'][0]['planned_added_lines']==1)
             repeat=data(tool(session,'apply_diff',runtime_id=runtime,request_id='patch',diff=patch))
             check('diff redelivery does not reapply',repeat['job_id']==applied['job_id'])
+            check('redelivery preserves file edit metadata',repeat['edits']==applied['edits'])
+            names=data(tool(session,'list_files',runtime_id=runtime,glob='new.txt'))
+            check('file discovery uses the trusted ripgrep executable',names['ok'] and names['files']==[str(project/'new.txt')])
+            matches=data(tool(session,'search_files',runtime_id=runtime,pattern='created',glob='new.txt'))
+            check('literal search returns path and one-based line',matches['ok'] and len(matches['matches'])==1 and matches['matches'][0]['line']==1)
+            listed=data(tool(session,'list_jobs',runtime_id=runtime,limit=1))
+            check('job list is bounded and retains runtime scope',listed['ok'] and len(listed['jobs'])==1 and listed['has_more'] and listed['snapshot'] is False)
             check('Git index is unchanged',(project/'.git/index').read_bytes()==index)
             badpatch='--- a/new.txt\n+++ b/new.txt\n@@ -1 +1 @@\n-not-the-content\n+oops\n'
             failed=data(tool(session,'apply_diff',runtime_id=runtime,request_id='badpatch',diff=badpatch));failed=wait(session,runtime,failed['job_id'])
             check('failed Git check does not apply',(project/'new.txt').read_text()=='created\n' and failed['exit_code']!=0)
+            check('failed check reports confirmed non-application',failed['edits'][0]['status']=='not_applied')
+            unicode_job=run('utf8-pages',[sys.executable,'-c',"import os;os.write(1,('あ😀\\r\\n'*20).encode());os.write(2,'終わり\\n'.encode())"])
+            wait(session,runtime,unicode_job['job_id'])
+            cursor=None;streams=['',''];clean=True
+            for _ in range(200):
+                args=dict(runtime_id=runtime,job_id=unicode_job['job_id'],max_output_bytes=8)
+                if cursor is not None:args['cursor']=cursor
+                page=data(tool(session,'command_status',**args))
+                clean=clean and page['output_budget_bytes']==8 and not page['stdout']['lossy'] and not page['stderr']['lossy']
+                streams[0]+=page['stdout']['text'];streams[1]+=page['stderr']['text']
+                if not page['stdout']['has_more'] and not page['stderr']['has_more']:break
+                assert cursor!=page['next_cursor'];cursor=page['next_cursor']
+            else:raise AssertionError('UTF-8 cursor did not complete')
+            check('small status pages retain Unicode and separate streams',clean and streams==['あ😀\r\n'*20,'終わり\n'])
             metadata=run('git-metadata',['git','add','new.txt'])
             check('explicit Git metadata root permits requested index update',wait(session,runtime,metadata['job_id'])['exit_code']==0 and (project/'.git/index').read_bytes()!=index)
 
@@ -145,6 +174,7 @@ def main():
                     break
                 else:raise TimeoutError('waiting exec receipt')
                 check('session info stays available during exec wait',data(tool(session,'session_info'))['runtime_id']==runtime)
+                check('job list stays available during exec wait',data(tool(session,'list_jobs',runtime_id=runtime))['ok'])
                 written=data(tool(session,'write_stdin',runtime_id=runtime,job_id=observed['job_id'],request_id='waiting-rpc-input',data='one\n'))
                 check('input stays available during exec wait with one RPC slot',written['delivery']=='accepted')
                 stopped=data(tool(session,'stop_command',runtime_id=runtime,job_id=observed['job_id']))

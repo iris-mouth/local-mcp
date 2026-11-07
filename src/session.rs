@@ -7,16 +7,13 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use rmcp::model::CallToolResult;
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::io::{AsyncWriteExt, BufReader};
 
-fn parse<T: DeserializeOwned>(args: Value) -> Result<T> {
-    Ok(serde_json::from_value(args)?)
-}
 pub async fn dispatch(jobs: Arc<Jobs>, call: ToolCall) -> CallToolResult {
     let image_response = call.name == "view_image";
+    let message_limit = jobs.session.settings.max_message_bytes;
     let identifiers = call.arguments.clone();
     let mut result = dispatch_inner(jobs, call).await;
     if let Some(Value::Object(payload)) = &mut result.structured_content {
@@ -35,14 +32,39 @@ pub async fn dispatch(jobs: Arc<Jobs>, call: ToolCall) -> CallToolResult {
     if image_response && result.is_error != Some(true) {
         result.structured_content = None;
     }
+    if serde_json::to_vec(&result)
+        .is_ok_and(|bytes| bytes.len() > message_limit.saturating_sub(1024))
+    {
+        let original = result.structured_content.as_ref();
+        let mut limited = failure(
+            "delivery_limit",
+            "Result exceeds the session message budget. Inspect the original job/request with a smaller output budget; do not repeat a change.",
+        );
+        if let Some(payload) = limited.structured_content.as_mut() {
+            for key in ["session_id", "runtime_id", "job_id", "request_id"] {
+                if let Some(value) = original
+                    .and_then(|v| v.get(key))
+                    .or_else(|| identifiers.get(key))
+                    .filter(|value| {
+                        value.is_null() || value.as_str().is_some_and(|text| text.len() <= 128)
+                    })
+                {
+                    payload[key] = value.clone();
+                }
+            }
+            limited.content[0] =
+                rmcp::model::ContentBlock::text(serde_json::to_string(payload).unwrap());
+        }
+        return limited;
+    }
     result
 }
 async fn dispatch_inner(jobs: Arc<Jobs>, call: ToolCall) -> CallToolResult {
     macro_rules! parsed {
         ($ty:ty) => {
-            match parse::<$ty>(call.arguments) {
+            match parse_arguments::<$ty>(call.arguments) {
                 Ok(v) => v,
-                Err(_) => return failure("invalid_arguments", "invalid or unknown tool fields"),
+                Err(error) => return *error,
             }
         };
     }
@@ -61,6 +83,9 @@ async fn dispatch_inner(jobs: Arc<Jobs>, call: ToolCall) -> CallToolResult {
                 .await
         }
         "command_status" => jobs.status(parsed!(StatusArgs)).await,
+        "list_jobs" => jobs.list(parsed!(ListJobsArgs)),
+        "list_files" => crate::search::list(jobs, parsed!(ListFilesArgs)).await,
+        "search_files" => crate::search::search(jobs, parsed!(SearchArgs)).await,
         "write_stdin" => jobs.input(parsed!(InputArgs)).await,
         "stop_command" => jobs.stop(parsed!(StopArgs)).await,
         "apply_diff" => jobs.apply_diff(parsed!(DiffArgs)).await,

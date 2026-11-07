@@ -48,6 +48,7 @@ fn status(j: &Jobs, id: &str, cursor: Option<String>) -> StatusArgs {
         request_id: None,
         cursor,
         wait_ms: Some(0),
+        max_output_bytes: None,
     }
 }
 #[cfg(unix)]
@@ -326,6 +327,7 @@ async fn read_preserves_crlf_outside_roots_and_schema_rejects_unknown_fields() {
         path: path.to_string_lossy().into_owned(),
         start_line: None,
         max_lines: None,
+        max_bytes: None,
     };
     assert_eq!(
         files::read(&j.session, args)
@@ -336,7 +338,9 @@ async fn read_preserves_crlf_outside_roots_and_schema_rejects_unknown_fields() {
         "first\r\nsecond\n"
     );
     assert!(serde_json::from_value::<ExecArgs>(json!({"session_id":"test","runtime_id":"r","request_id":"x","argv":["true"],"approved":true})).is_err());
-    assert_eq!(mcp::tools().len(), 9);
+    for name in ["list_jobs", "list_files", "search_files"] {
+        assert!(mcp::tools().iter().any(|tool| tool.name == name));
+    }
     assert!(
         mcp::tools()
             .iter()
@@ -442,6 +446,7 @@ async fn line_range_does_not_read_or_validate_the_following_line() {
         path: "lines.txt".into(),
         start_line: Some(1),
         max_lines: Some(1),
+        max_bytes: None,
     };
     let first = files::read(&j.session, args.clone())
         .await

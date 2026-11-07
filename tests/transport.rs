@@ -241,6 +241,8 @@ async fn one_owner_rpc_slot_keeps_control_available_during_exec_wait() {
     let job = &state["job_id"];
     client.call(4, "session_info", json!({})).await;
     assert_eq!(client.result(4).await["ok"], true);
+    client.call(7, "list_jobs", json!({"runtime_id":runtime})).await;
+    assert_eq!(client.result(7).await["jobs"][0]["job_id"], *job);
     client.call(5, "write_stdin", json!({"runtime_id":runtime,"job_id":job,"request_id":"input","data":"one"})).await;
     assert_eq!(client.result(5).await["delivery"], "accepted");
     client.call(6, "stop_command", json!({"runtime_id":runtime,"job_id":job})).await;
@@ -277,6 +279,8 @@ async fn saturated_mcp_and_owner_waits_keep_control_capacity_reserved() {
     assert_eq!(rejected["result"]["structuredContent"]["error"]["code"], "rpc_capacity");
     client.call(100, "session_info", json!({})).await;
     assert_eq!(client.result(100).await["ok"], true);
+    client.call(103, "list_jobs", json!({"runtime_id":runtime})).await;
+    assert_eq!(client.result(103).await["ok"], true);
     client.call(101, "command_status", json!({"runtime_id":runtime,"job_id":job})).await;
     assert_eq!(client.result(101).await["state"], "running");
     client.call(102, "stop_command", json!({"runtime_id":runtime,"job_id":job})).await;

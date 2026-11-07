@@ -11,15 +11,27 @@ use std::{
 use tokio::io::AsyncWriteExt;
 
 pub async fn read(session: &Session, args: ReadArgs) -> Result<CallToolResult> {
-    ensure!(
-        args.start_line.unwrap_or(1) > 0 && args.max_lines != Some(0),
-        "line range must be positive"
-    );
+    if args.start_line == Some(0) {
+        return Ok(invalid_argument(
+            "start_line",
+            "a one-based positive line number",
+        ));
+    }
+    if args.max_lines == Some(0) {
+        return Ok(invalid_argument("max_lines", "a positive line count"));
+    }
     ensure!(args.path.len() <= 4096, "path too long");
     let path = session.cwd.join(&args.path);
-    let cap = session.settings.max_message_bytes / 16;
+    let ceiling = session.settings.max_message_bytes / 16;
+    let cap = args.max_bytes.unwrap_or(65536.min(ceiling));
+    if cap == 0 || cap > ceiling {
+        return Ok(invalid_argument(
+            "max_bytes",
+            &format!("1..={ceiling} source bytes"),
+        ));
+    }
     let start = args.start_line.unwrap_or(1);
-    let max_lines = args.max_lines.unwrap_or(usize::MAX);
+    let max_lines = args.max_lines.unwrap_or(200);
     let value = tokio::task::spawn_blocking(move || -> Result<_> {
         let file = open_regular(&path)?;
         let mut reader = BufReader::new(file);
@@ -181,8 +193,66 @@ async fn diff_metadata(session: &Session, patch: &str, format: &str) -> Result<V
     Ok(output.stdout)
 }
 
-pub async fn validate_diff(session: &Session, patch: &str) -> Result<()> {
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct DiffTarget {
+    pub path: String,
+    pub operation: String,
+    pub planned_added_lines: u64,
+    pub planned_removed_lines: u64,
+}
+
+// Git's --summary quotes unusual paths using C escapes (including octal
+// UTF-8 bytes). Interpret that metadata, never model-provided header guesses.
+fn summary_path(value: &str) -> Result<String> {
+    if !value.starts_with('"') {
+        return Ok(value.to_owned());
+    }
+    ensure!(value.ends_with('"'), "invalid Git summary path");
+    let input = &value.as_bytes()[1..value.len() - 1];
+    let mut output = Vec::new();
+    let mut i = 0;
+    while i < input.len() {
+        let byte = input[i];
+        i += 1;
+        if byte != b'\\' {
+            output.push(byte);
+            continue;
+        }
+        let byte = *input.get(i).context("invalid Git path escape")?;
+        i += 1;
+        if (b'0'..=b'7').contains(&byte) {
+            let mut number = u16::from(byte - b'0');
+            for _ in 0..2 {
+                if let Some(next) = input.get(i).filter(|b| (b'0'..=b'7').contains(b)) {
+                    number = number * 8 + u16::from(*next - b'0');
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            ensure!(number <= 255, "invalid Git octal escape");
+            output.push(number as u8);
+        } else {
+            output.push(match byte {
+                b'a' => 7,
+                b'b' => 8,
+                b't' => 9,
+                b'n' => 10,
+                b'v' => 11,
+                b'f' => 12,
+                b'r' => 13,
+                b'\\' => b'\\',
+                b'"' => b'"',
+                _ => anyhow::bail!("invalid Git path escape"),
+            });
+        }
+    }
+    Ok(String::from_utf8(output)?)
+}
+
+pub async fn validate_diff(session: &Session, patch: &str) -> Result<Vec<DiffTarget>> {
     let summary = diff_metadata(session, patch, "--summary").await?;
+    let mut operations = std::collections::BTreeMap::new();
     for line in std::str::from_utf8(&summary)?.lines() {
         let fields: Vec<_> = line.split_ascii_whitespace().collect();
         let regular = |mode: &str| matches!(mode, "100644" | "100755");
@@ -192,10 +262,17 @@ pub async fn validate_diff(session: &Session, patch: &str) -> Result<()> {
             _ => true,
         };
         ensure!(modes_valid, "patch target must be a regular text file");
+        for (prefix, operation) in [("create mode ", "create"), ("delete mode ", "delete")] {
+            if let Some(rest) = line.trim_start().strip_prefix(prefix) {
+                let (_, path) = rest.split_once(' ').context("invalid Git summary")?;
+                operations.insert(summary_path(path)?, operation);
+            }
+        }
     }
     let targets = diff_metadata(session, patch, "--numstat").await?;
-    let mut count = 0;
+    let mut result = Vec::new();
     for entry in targets.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+        ensure!(result.len() < 256, "diff exceeds 256 file targets");
         let parts: Vec<_> = entry.splitn(3, |b| *b == b'\t').collect();
         ensure!(
             parts.len() == 3 && parts[0] != b"-" && parts[1] != b"-",
@@ -250,8 +327,13 @@ pub async fn validate_diff(session: &Session, patch: &str) -> Result<()> {
                 }
             }
         }
-        count += 1;
+        result.push(DiffTarget {
+            path: name.to_owned(),
+            operation: operations.get(name).copied().unwrap_or("update").into(),
+            planned_added_lines: std::str::from_utf8(parts[0])?.parse()?,
+            planned_removed_lines: std::str::from_utf8(parts[1])?.parse()?,
+        });
     }
-    ensure!(count > 0, "diff has no text targets");
-    Ok(())
+    ensure!(!result.is_empty(), "diff has no text targets");
+    Ok(result)
 }

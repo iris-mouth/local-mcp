@@ -1,6 +1,7 @@
 # 08 限定的な名前探索と本文検索
 
 Status: ready-for-agent
+Resolution: implemented
 
 Spec: [採用9項目の仕様](../spec.md)
 
@@ -16,10 +17,10 @@ Spec: [採用9項目の仕様](../spec.md)
 
 ## 受入条件
 
-- [ ] 名前/本文、空結果、literalとregex、glob、パスの空白/Unicode、binary、ignore/hidden、symlinkを検証する。
-- [ ] host-user読取範囲と整合させ、model指定の実行file・shell・自動downloadを追加しない。
-- [ ] 大量出力・長大な一致行・不正pattern・依存欠如・時間上限・終了時の子回収を検証する。
-- [ ] 検索中も既存のcontrolを塞がない。結果からread_fileで目的箇所を取得できる。
+- [x] 名前/本文、空結果、literalとregex、glob、パスの空白/Unicode、binary、ignore/hidden、symlinkを検証する。
+- [x] host-user読取範囲と整合させ、model指定の実行file・shell・自動downloadを追加しない。
+- [x] 大量出力・長大な一致行・不正pattern・依存欠如・時間上限・終了時の子回収を検証する。
+- [x] 検索中も既存のcontrolを塞がない。結果からread_fileで目的箇所を取得できる。
 
 ## 依存と検証
 
@@ -30,3 +31,4 @@ Spec: [採用9項目の仕様](../spec.md)
 ## Comments
 
 - 2026-11-07: 本人が採用した項目の実装準備として作成。実装・受入は未実施。基準環境と検査結果は../baseline.mdを参照する。
+- 2026-11-07: 実装完了。list_files / search_filesを実rgの固定argvで実装。literal/regex/glob・ignore/hidden・空白/日本語path・非UTF-8本文・symlink非追跡、件数/配送/frame上限、依存欠如・非対応実行ファイル・時間上限・終了時回収を検証した。書換可能な範囲内の検索実行ファイルは拒否。追加依存とhost-user読取範囲をREADMEへ明記。詳細は[実装記録](../implementation.md)。

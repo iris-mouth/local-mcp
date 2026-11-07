@@ -1,6 +1,7 @@
 # 07 同じ作業セッションのジョブ一覧をMCPへ公開
 
 Status: ready-for-agent
+Resolution: implemented
 
 Spec: [採用9項目の仕様](../spec.md)
 
@@ -16,9 +17,9 @@ Spec: [採用9項目の仕様](../spec.md)
 
 ## 受入条件
 
-- [ ] 空一覧、複数ページ、実行中/停止要求/終了/不明、MCP再接続後の同じruntimeを確認する。
-- [ ] 古いruntime・別条件のcursorを拒否し、作業セッション再起動をまたいで復元しない。
-- [ ] work枠が満杯でもジョブ確認・既存の入力/停止が応答する。
+- [x] 空一覧、複数ページ、実行中/停止要求/終了/不明、MCP再接続後の同じruntimeを確認する。
+- [x] 古いruntime・別条件のcursorを拒否し、作業セッション再起動をまたいで復元しない。
+- [x] work枠が満杯でもジョブ確認・既存の入力/停止が応答する。
 
 ## 依存と検証
 
@@ -29,3 +30,4 @@ tests/contracts.rs、tests/transport.rsの容量・再接続ケース、tests/cl
 ## Comments
 
 - 2026-11-07: 本人が採用した項目の実装準備として作成。実装・受入は未実施。基準環境と検査結果は../baseline.mdを参照する。
+- 2026-11-07: 実装完了。list_jobsを追加。既定50/最大200件、ID順、runtimeとlimitに結び付くcursor、liveな一覧を実装した。空・複数ページ・異なるlimit/古いruntimeの拒否、再接続、1work枠と64wait飽和時のcontrol応答を確認。詳細は[実装記録](../implementation.md)。
